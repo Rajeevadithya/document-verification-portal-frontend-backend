@@ -113,8 +113,8 @@ function flattenGRN(record: GRNRecord): FlattenedRow[] {
 }
 
 function getReference(record: PRRecord | PORecord | GRNRecord) {
-  if ("pr_number" in record && "items" in record && !("vendor" in record)) return record.pr_number;
-  if ("po_number" in record && "vendor" in record) return record.po_number;
+  if ("pr_number" in record) return record.pr_number;
+  if ("po_number" in record) return record.po_number;
   return (record as GRNRecord).grn_number;
 }
 

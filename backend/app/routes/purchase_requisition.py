@@ -13,6 +13,7 @@ GET  /api/pr/documents/<doc_id>/audit-logs       – audit log for one specific 
 import os
 from flask import Blueprint, request, send_file
 from app import mongo
+from datetime import datetime
 from app.utils.helpers import (
     serialize_doc, success_response, error_response, allowed_file
 )
@@ -22,6 +23,64 @@ from app.services.document_service import (
 )
 
 pr_bp = Blueprint("purchase_requisition", __name__)
+
+
+@pr_bp.route("/ingest", methods=["POST"])
+def ingest_pr():
+    data = request.json
+
+    if not data:
+        return error_response("No data received", 400)
+
+    # If API sends multiple PRs
+    if isinstance(data, list):
+        inserted = []
+
+        for pr in data:
+            pr_doc = {
+                "pr_number": pr.get("pr_number"),
+                "document_type": pr.get("document_type", "NB"),
+                "plant": pr.get("plant"),
+                "vendor": pr.get("vendor"),
+                "status": pr.get("status", "Open"),
+                "items": pr.get("items", []),
+                "created_at": datetime.utcnow()
+            }
+
+            if not pr_doc["pr_number"]:
+                continue
+
+            mongo.db.purchase_requisitions.update_one(
+                {"pr_number": pr_doc["pr_number"]},
+                {"$set": pr_doc},
+                upsert=True   # 🔥 important
+            )
+
+            inserted.append(pr_doc["pr_number"])
+
+        return success_response(inserted, "PRs ingested")
+
+    # Single PR
+    pr_doc = {
+        "pr_number": data.get("pr_number"),
+        "document_type": data.get("document_type", "NB"),
+        "plant": data.get("plant"),
+        "vendor": data.get("vendor"),
+        "status": data.get("status", "Open"),
+        "items": data.get("items", []),
+        "created_at": datetime.utcnow()
+    }
+
+    if not pr_doc["pr_number"]:
+        return error_response("pr_number required", 400)
+
+    mongo.db.purchase_requisitions.update_one(
+        {"pr_number": pr_doc["pr_number"]},
+        {"$set": pr_doc},
+        upsert=True
+    )
+
+    return success_response(pr_doc, "PR ingested")
 
 
 # ── list all PRs ──────────────────────────────────────────────────────────────
