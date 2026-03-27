@@ -1,0 +1,446 @@
+{
+  "info": {
+    "name": "SAP Procurement Portal API",
+    "description": "Complete Postman collection for SAP Procurement Support Portal. All endpoints for PR, PO, GRN, Invoice, Notifications, Dashboard.\n\nBase URL: http://localhost:5000\n\nSetup:\n1. Run seed_data.py first to populate demo data\n2. Import this collection\n3. Set variable BASE_URL = http://localhost:5000",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "BASE_URL", "value": "http://localhost:5000" },
+    { "key": "PR_NUMBER", "value": "PR-1001" },
+    { "key": "PO_NUMBER", "value": "PO-2001" },
+    { "key": "GRN_NUMBER", "value": "GRN-3001" },
+    { "key": "INV_NUMBER", "value": "INV-4001" },
+    { "key": "DOC_ID", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Master Data (Value Help)",
+      "item": [
+        {
+          "name": "List All PR Numbers",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/master/pr-numbers",
+            "description": "Returns all PR numbers for value help dropdown"
+          }
+        },
+        {
+          "name": "List All PO Numbers",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/master/po-numbers",
+            "description": "Returns all PO numbers for value help dropdown"
+          }
+        },
+        {
+          "name": "List All GRN Numbers",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/master/grn-numbers"
+          }
+        },
+        {
+          "name": "List All Invoice Numbers",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/master/invoice-numbers"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Purchase Requisition",
+      "item": [
+        {
+          "name": "List All PRs",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/pr/"
+          }
+        },
+        {
+          "name": "Get PR Details (Auto-fill)",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/pr/{{PR_NUMBER}}",
+            "description": "Fetches all PR fields for table display. Non-editable data."
+          }
+        },
+        {
+          "name": "Upload PR Documents (Multiple)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/pr/{{PR_NUMBER}}/documents/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "description": "Can upload multiple files. PR supports multiple uploads."
+                }
+              ]
+            },
+            "description": "Upload one or more PR documents. OCR validation runs automatically."
+          }
+        },
+        {
+          "name": "Change PR Document",
+          "request": {
+            "method": "PUT",
+            "url": "{{BASE_URL}}/api/pr/{{PR_NUMBER}}/documents/{{DOC_ID}}/change",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file" }
+              ]
+            },
+            "description": "Replace an existing PR document. Old version is archived."
+          }
+        },
+        {
+          "name": "View PR Documents",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/pr/{{PR_NUMBER}}/documents",
+            "description": "View all active uploaded documents for a PR."
+          }
+        },
+        {
+          "name": "Download PR Document",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/pr/documents/{{DOC_ID}}/download",
+            "description": "Download a specific document by its _id."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Purchase Order",
+      "item": [
+        {
+          "name": "List All POs",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/po/"
+          }
+        },
+        {
+          "name": "Get PO Details (Auto-fill)",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/po/{{PO_NUMBER}}"
+          }
+        },
+        {
+          "name": "Get PO by PR Number",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/po/by-pr/{{PR_NUMBER}}",
+            "description": "Returns the PO linked to a specific PR."
+          }
+        },
+        {
+          "name": "Upload PO Document (Single)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/po/{{PO_NUMBER}}/documents/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file" }
+              ]
+            },
+            "description": "Upload single PO document. OCR validates type + PO number + cross-checks PR number."
+          }
+        },
+        {
+          "name": "Change PO Document",
+          "request": {
+            "method": "PUT",
+            "url": "{{BASE_URL}}/api/po/{{PO_NUMBER}}/documents/{{DOC_ID}}/change",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "View PO Document",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/po/{{PO_NUMBER}}/documents"
+          }
+        },
+        {
+          "name": "Download PO Document",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/po/documents/{{DOC_ID}}/download"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Goods Receipt (GRN)",
+      "item": [
+        {
+          "name": "List All GRNs",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/grn/"
+          }
+        },
+        {
+          "name": "Get GRN Details (Auto-fill)",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/grn/{{GRN_NUMBER}}"
+          }
+        },
+        {
+          "name": "Get GRN by PO Number",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/grn/by-po/{{PO_NUMBER}}"
+          }
+        },
+        {
+          "name": "Upload GRN Document (Single)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/grn/{{GRN_NUMBER}}/documents/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Change GRN Document",
+          "request": {
+            "method": "PUT",
+            "url": "{{BASE_URL}}/api/grn/{{GRN_NUMBER}}/documents/{{DOC_ID}}/change",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "View GRN Document",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/grn/{{GRN_NUMBER}}/documents"
+          }
+        },
+        {
+          "name": "Download GRN Document",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/grn/documents/{{DOC_ID}}/download"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Invoice Verification",
+      "item": [
+        {
+          "name": "List All Invoices",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/invoice/"
+          }
+        },
+        {
+          "name": "Get Invoice Aggregated (PR+PO+GRN)",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/invoice/{{INV_NUMBER}}",
+            "description": "Returns aggregated PR, PO, GRN data for invoice verification tab display."
+          }
+        },
+        {
+          "name": "Get Invoice by PO Number",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/invoice/by-po/{{PO_NUMBER}}"
+          }
+        },
+        {
+          "name": "Upload Invoice Document",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/invoice/{{INV_NUMBER}}/documents/upload",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Change Invoice Document",
+          "request": {
+            "method": "PUT",
+            "url": "{{BASE_URL}}/api/invoice/{{INV_NUMBER}}/documents/{{DOC_ID}}/change",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "View Invoice Document",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/invoice/{{INV_NUMBER}}/documents"
+          }
+        },
+        {
+          "name": "Download Invoice Document",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/invoice/documents/{{DOC_ID}}/download"
+          }
+        },
+        {
+          "name": "MIRO Redirect (Send to SAP)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/invoice/{{INV_NUMBER}}/miro-redirect",
+            "description": "Logs handoff to SAP MIRO and returns the redirect URL. Frontend opens this URL in new tab."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "List All Notifications",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/notifications/",
+            "description": "Unread notifications appear first."
+          }
+        },
+        {
+          "name": "List Unread Notifications Only",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/notifications/?unread=true",
+              "query": [{ "key": "unread", "value": "true" }]
+            }
+          }
+        },
+        {
+          "name": "List Notifications by Stage",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/notifications/?stage=PR",
+              "query": [{ "key": "stage", "value": "PR" }]
+            }
+          }
+        },
+        {
+          "name": "Unread Count",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/notifications/unread-count",
+            "description": "Used by the topbar notification badge."
+          }
+        },
+        {
+          "name": "Mark Notification as Read",
+          "request": {
+            "method": "PUT",
+            "url": "{{BASE_URL}}/api/notifications/{{NOTIF_ID}}/read"
+          }
+        },
+        {
+          "name": "Mark All Notifications as Read",
+          "request": {
+            "method": "PUT",
+            "url": "{{BASE_URL}}/api/notifications/mark-all-read"
+          }
+        },
+        {
+          "name": "Create Notification (Manual)",
+          "request": {
+            "method": "POST",
+            "url": "{{BASE_URL}}/api/notifications/",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"MISSING_DOCUMENT\",\n  \"stage\": \"PR\",\n  \"reference_number\": \"PR-1001\",\n  \"message\": \"PR document not uploaded for PR-1001\",\n  \"action_label\": \"Upload Now\",\n  \"action_route\": \"/document-uploads/pr/upload?pr=PR-1001\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Notification",
+          "request": {
+            "method": "DELETE",
+            "url": "{{BASE_URL}}/api/notifications/{{NOTIF_ID}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "Dashboard Summary",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/dashboard/summary",
+            "description": "Top-level KPIs: totals, doc upload status, OCR summary, notifications."
+          }
+        },
+        {
+          "name": "Stage-wise Document Status",
+          "request": {
+            "method": "GET",
+            "url": "{{BASE_URL}}/api/dashboard/stages",
+            "description": "Per-record document upload and OCR status across all stages."
+          }
+        },
+        {
+          "name": "Recent Activity",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{BASE_URL}}/api/dashboard/recent-activity?limit=10",
+              "query": [{ "key": "limit", "value": "10" }]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
