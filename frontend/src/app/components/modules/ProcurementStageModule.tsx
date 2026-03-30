@@ -113,9 +113,9 @@ function flattenGRN(record: GRNRecord): FlattenedRow[] {
 }
 
 function getReference(record: PRRecord | PORecord | GRNRecord) {
-  if ("pr_number" in record) return record.pr_number;
+  if ("grn_number" in record) return record.grn_number;
   if ("po_number" in record) return record.po_number;
-  return (record as GRNRecord).grn_number;
+  return record.pr_number;
 }
 
 function flattenRecord(record: PRRecord | PORecord | GRNRecord, stage: Exclude<FrontendStageKey, "INV">) {
@@ -220,6 +220,7 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
       const docEntries = await Promise.all(
         details.map(async (detail) => {
           const reference = getReference(detail);
+          if (!reference) return [reference, []] as const;   // ← add this guard
           const response = await listDocuments(stage, reference);
           const documents = "documents" in response ? response.documents : response.document ? [response.document] : [];
           return [reference, documents] as const;
