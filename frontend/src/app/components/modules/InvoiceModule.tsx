@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Download, Eye, Link2, LoaderCircle, Paperclip } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Download, Edit, Eye, Link2, LoaderCircle, Paperclip } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { FilterBar, createEmptyFilterValues, type FilterValues } from "../FilterBar";
-import { getDocumentDownloadUrl, getStageRecord, listDocuments, listStageRecords, listValueHelp } from "../../lib/api";
+import { getDocumentDownloadUrl, getStageRecord, listDocuments, listStageRecords, listValueHelp, replaceDocument, reviewDocument, uploadDocuments } from "../../lib/api";
 import { formatCurrency, formatDate, formatFileSize } from "../../lib/format";
 import { ModuleFooterAlerts, SelectionPlaceholder } from "./ModuleExperience";
 import type {
@@ -124,12 +124,14 @@ function AttachmentSubCard({
   reference,
   docs,
   loading,
+  onReview,
 }: {
   title: string;
   stage: StageKey;
   reference: string;
   docs: StageDocument[];
   loading: boolean;
+  onReview: (stage: "PR" | "PO" | "GRN", reference: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
 }) {
   return (
     <div
@@ -171,7 +173,7 @@ function AttachmentSubCard({
           <table style={{ borderCollapse: "collapse", width: "100%", minWidth: "760px" }}>
             <thead>
               <tr>
-                {["File Name", "Version", "Uploaded", "Size", "Actions"].map((header, index, arr) => (
+                {["File Name", "Version", "Uploaded", "Decision", "Actions"].map((header, index, arr) => (
                   <th
                     key={header}
                     style={{ ...TH_STYLE, fontSize: "11px", backgroundColor: "#f8fbff", borderRight: index === arr.length - 1 ? "none" : TH_STYLE.borderRight }}
@@ -187,7 +189,7 @@ function AttachmentSubCard({
                   <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "600" }}>{doc.original_filename}</td>
                   <td style={TD_STYLE}>v{doc.version}</td>
                   <td style={TD_STYLE}>{formatDate(doc.uploaded_at)}</td>
-                  <td style={TD_STYLE}>{formatFileSize(doc.file_size)}</td>
+                  <td style={TD_STYLE}>{doc.review_status}</td>
                   <td style={{ ...TD_STYLE, borderRight: "none" }}>
                     <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                       <a
@@ -206,6 +208,22 @@ function AttachmentSubCard({
                         <Download size={11} />
                         Download
                       </a>
+                      {(stage === "PR" || stage === "PO" || stage === "GRN") ? (
+                        <>
+                          <button
+                            onClick={() => void onReview(stage, reference, doc, "ACCEPTED")}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#107E3E", backgroundColor: "transparent", border: "none", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            onClick={() => void onReview(stage, reference, doc, "REJECTED")}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#BB0000", backgroundColor: "transparent", border: "none", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
+                          >
+                            Reject
+                          </button>
+                        </>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -286,6 +304,224 @@ function DataTable({
           )}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function InvoiceDocumentPanel({
+  invoiceNumber,
+  docs,
+  docsLoading,
+  action,
+  onActionChange,
+  onUpload,
+  onReplace,
+  onReview,
+  selectedDocumentId,
+  onSelectDocument,
+}: {
+  invoiceNumber: string;
+  docs: StageDocument[];
+  docsLoading: boolean;
+  action: "upload" | "view" | "change";
+  onActionChange: (action: "upload" | "view" | "change") => void;
+  onUpload: (file: File) => Promise<void>;
+  onReplace: (documentId: string, file: File) => Promise<void>;
+  onReview: (doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
+  selectedDocumentId: string | null;
+  onSelectDocument: (documentId: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const selectedDoc = docs.find((doc) => doc._id === selectedDocumentId) || docs[0] || null;
+  const pendingMode = useRef<"upload" | "change">("upload");
+
+  const triggerFilePicker = (mode: "upload" | "change") => {
+    pendingMode.current = mode;
+    inputRef.current?.click();
+  };
+
+  const handleFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (pendingMode.current === "change") {
+      if (!selectedDoc) return;
+      await onReplace(selectedDoc._id, file);
+    } else {
+      await onUpload(file);
+    }
+
+    event.target.value = "";
+  };
+
+  return (
+    <div
+      style={{
+        backgroundColor: "#ffffff",
+        border: "1px solid #e2e8f0",
+        borderRadius: "16px",
+        overflow: "hidden",
+        boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
+      }}
+    >
+      <div style={{ padding: "16px 20px", borderBottom: "1px solid #f1f5f9", backgroundColor: "#fafcff", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Invoice Attachment</div>
+          <div style={{ fontSize: "11px", color: "#64748b", marginTop: "3px" }}>{invoiceNumber}</div>
+        </div>
+      </div>
+
+      <input ref={inputRef} type="file" accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" style={{ display: "none" }} onChange={(event) => void handleFileSelection(event)} />
+
+      {docsLoading ? (
+        <div style={{ padding: "16px", display: "flex", alignItems: "center", gap: "8px", color: "#6A6D70", fontSize: "12px" }}>
+          <LoaderCircle size={14} className="animate-spin" />
+          Loading invoice document...
+        </div>
+      ) : docs.length === 0 ? (
+        <div style={{ padding: "16px 20px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+          <div style={{ fontSize: "12px", color: "#94a3b8" }}>No invoice document uploaded yet.</div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            <button
+              onClick={() => {
+                onActionChange("upload");
+                triggerFilePicker("upload");
+              }}
+              style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}
+            >
+              <Edit size={14} /> Edit
+            </button>
+            <button
+              onClick={() => onActionChange("view")}
+              style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: action === "view" ? "1px solid #0070F2" : "1px solid #d9d9d9", backgroundColor: action === "view" ? "#eff6ff" : "#ffffff", color: action === "view" ? "#0070F2" : "#32363a", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}
+              disabled={!selectedDoc}
+            >
+              <Eye size={14} /> View
+            </button>
+            <button
+              onClick={() => selectedDoc && void onReview(selectedDoc, "ACCEPTED")}
+              disabled={!selectedDoc}
+              style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "1px solid #107E3E", backgroundColor: "#ffffff", color: "#107E3E", fontSize: "13px", fontWeight: "700", cursor: selectedDoc ? "pointer" : "not-allowed", opacity: selectedDoc ? 1 : 0.55 }}
+            >
+              Approve
+            </button>
+            <button
+              onClick={() => selectedDoc && void onReview(selectedDoc, "REJECTED")}
+              disabled={!selectedDoc}
+              style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "1px solid #BB0000", backgroundColor: "#ffffff", color: "#BB0000", fontSize: "13px", fontWeight: "700", cursor: selectedDoc ? "pointer" : "not-allowed", opacity: selectedDoc ? 1 : 0.55 }}
+            >
+              Reject
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: "760px" }}>
+              <thead>
+                <tr>
+                  {["File Name", "Version", "Uploaded", "Size", "Actions"].map((header, index, arr) => (
+                    <th
+                      key={header}
+                      style={{ ...TH_STYLE, fontSize: "11px", backgroundColor: "#f8fbff", borderRight: index === arr.length - 1 ? "none" : TH_STYLE.borderRight }}
+                    >
+                      {header}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {docs.map((doc, index) => (
+                  <tr key={doc._id} style={{ backgroundColor: index % 2 === 0 ? "#ffffff" : "#fafcff" }}>
+                    <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "600" }}>{doc.original_filename}</td>
+                    <td style={TD_STYLE}>v{doc.version}</td>
+                    <td style={TD_STYLE}>{formatDate(doc.uploaded_at)}</td>
+                    <td style={TD_STYLE}>{formatFileSize(doc.file_size)}</td>
+                    <td style={{ ...TD_STYLE, borderRight: "none" }}>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                        <button
+                          onClick={() => {
+                            onActionChange("view");
+                            onSelectDocument(doc._id);
+                            window.open(getDocumentDownloadUrl("INVOICE", doc._id, true), "_blank", "noopener,noreferrer");
+                          }}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#0070F2", backgroundColor: "transparent", border: "none", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
+                        >
+                          <Eye size={11} />
+                          View
+                        </button>
+                        <a
+                          href={getDocumentDownloadUrl("INVOICE", doc._id)}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#475569", textDecoration: "none", fontSize: "11px", fontWeight: "600" }}
+                        >
+                          <Download size={11} />
+                          Download
+                        </a>
+                        <button
+                          onClick={() => {
+                            onActionChange("upload");
+                            onSelectDocument(doc._id);
+                            triggerFilePicker("upload");
+                          }}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#0070F2", backgroundColor: "transparent", border: "none", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
+                        >
+                          <Edit size={11} />
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => void onReview(doc, "ACCEPTED")}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#107E3E", backgroundColor: "transparent", border: "none", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => void onReview(doc, "REJECTED")}
+                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#BB0000", backgroundColor: "transparent", border: "none", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                onClick={() => {
+                  onActionChange("upload");
+                  triggerFilePicker("upload");
+                }}
+                style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}
+              >
+                <Edit size={14} /> Edit
+              </button>
+              <button
+                onClick={() => onActionChange("view")}
+                style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: action === "view" ? "1px solid #0070F2" : "1px solid #d9d9d9", backgroundColor: action === "view" ? "#eff6ff" : "#ffffff", color: action === "view" ? "#0070F2" : "#32363a", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}
+              >
+                <Eye size={14} /> View
+              </button>
+              <button
+                onClick={() => selectedDoc && void onReview(selectedDoc, "ACCEPTED")}
+                disabled={!selectedDoc}
+                style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "1px solid #107E3E", backgroundColor: "#ffffff", color: "#107E3E", fontSize: "13px", fontWeight: "700", cursor: selectedDoc ? "pointer" : "not-allowed", opacity: selectedDoc ? 1 : 0.55 }}
+              >
+                Approve
+              </button>
+              <button
+                onClick={() => selectedDoc && void onReview(selectedDoc, "REJECTED")}
+                disabled={!selectedDoc}
+                style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "1px solid #BB0000", backgroundColor: "#ffffff", color: "#BB0000", fontSize: "13px", fontWeight: "700", cursor: selectedDoc ? "pointer" : "not-allowed", opacity: selectedDoc ? 1 : 0.55 }}
+              >
+                Reject
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -374,6 +610,11 @@ export function InvoiceModule() {
   const [grnRecords, setGrnRecords] = useState<GRNRecord[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<string>(initialDocNumber);
   const [aggregate, setAggregate] = useState<InvoiceAggregate | null>(null);
+  const [invoiceAction, setInvoiceAction] = useState<"upload" | "view" | "change">("upload");
+  const [invoiceDocs, setInvoiceDocs] = useState<StageDocument[]>([]);
+  const [invoiceDocsLoading, setInvoiceDocsLoading] = useState(false);
+  const [invoiceUploading, setInvoiceUploading] = useState(false);
+  const [selectedInvoiceDocId, setSelectedInvoiceDocId] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [linkedDocs, setLinkedDocs] = useState<Record<"PR" | "PO" | "GRN", StageDocument[]>>({ PR: [], PO: [], GRN: [] });
   const [docsLoading, setDocsLoading] = useState<Record<"PR" | "PO" | "GRN", boolean>>({ PR: false, PO: false, GRN: false });
@@ -514,6 +755,9 @@ export function InvoiceModule() {
 
   useEffect(() => {
     if (!activeAggregate) {
+      setInvoiceDocs([]);
+      setInvoiceDocsLoading(false);
+      setSelectedInvoiceDocId(null);
       setLinkedDocs({ PR: [], PO: [], GRN: [] });
       setDocsLoading({ PR: false, PO: false, GRN: false });
       return;
@@ -554,6 +798,129 @@ export function InvoiceModule() {
       cancelled = true;
     };
   }, [activeAggregate]);
+
+  useEffect(() => {
+    if (!activeInvoice?.invoice_number || usesSyntheticLinkage) {
+      setInvoiceDocs([]);
+      setInvoiceDocsLoading(false);
+      setSelectedInvoiceDocId(null);
+      return;
+    }
+
+    let cancelled = false;
+    setInvoiceDocsLoading(true);
+
+    void listDocuments("INVOICE", activeInvoice.invoice_number)
+      .then((result) => {
+        if (cancelled) return;
+        const docs = "documents" in result ? result.documents : result.document ? [result.document] : [];
+        setInvoiceDocs(docs);
+        setSelectedInvoiceDocId((current) => {
+          if (current && docs.some((doc: StageDocument) => doc._id === current)) return current;
+          return docs[0]?._id ?? null;
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setInvoiceDocs([]);
+        setSelectedInvoiceDocId(null);
+      })
+      .finally(() => {
+        if (!cancelled) setInvoiceDocsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeInvoice?.invoice_number, usesSyntheticLinkage]);
+
+  const handleInvoiceUpload = async (file: File) => {
+    if (!activeInvoice?.invoice_number) return;
+    setInvoiceUploading(true);
+    setError(null);
+    try {
+      const uploaded = await uploadDocuments("INVOICE", activeInvoice.invoice_number, [file]);
+      setInvoiceAction("view");
+      const refreshed = await listDocuments("INVOICE", activeInvoice.invoice_number);
+      const docs = "documents" in refreshed ? refreshed.documents : refreshed.document ? [refreshed.document] : [];
+      setInvoiceDocs(docs);
+      setSelectedInvoiceDocId(docs[0]?._id ?? null);
+      setAggregate((current) => current ? { ...current, has_document: true, uploaded_document: uploaded as StageDocument } : current);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Unable to upload invoice document.");
+    } finally {
+      setInvoiceUploading(false);
+    }
+  };
+
+  const handleInvoiceReplace = async (documentId: string, file: File) => {
+    if (!activeInvoice?.invoice_number) return;
+    setInvoiceUploading(true);
+    setError(null);
+    try {
+      const updated = await replaceDocument("INVOICE", activeInvoice.invoice_number, documentId, file);
+      setInvoiceAction("view");
+      setInvoiceDocs([updated]);
+      setSelectedInvoiceDocId(updated._id);
+      setAggregate((current) => current ? { ...current, has_document: true, uploaded_document: updated } : current);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Unable to replace invoice document.");
+    } finally {
+      setInvoiceUploading(false);
+    }
+  };
+
+  const handleInvoiceReview = async (doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => {
+    if (!activeInvoice?.invoice_number) return;
+    setError(null);
+    let comment = "";
+    if (decision === "REJECTED") {
+      const entered = window.prompt("Enter an optional rejection comment for this invoice document.", doc.review_comment || "");
+      if (entered === null) return;
+      comment = entered.trim();
+    }
+
+    try {
+      const updated = await reviewDocument("INVOICE", activeInvoice.invoice_number, doc._id, decision, comment || undefined);
+      setInvoiceDocs((current) => current.map((item) => (item._id === updated._id ? updated : item)));
+      setSelectedInvoiceDocId(updated._id);
+      setAggregate((current) => current ? { ...current, has_document: true, uploaded_document: updated } : current);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Unable to update invoice document review status.");
+    }
+  };
+
+  useEffect(() => {
+    if (invoiceAction === "view" && selectedInvoiceDocId) {
+      window.open(getDocumentDownloadUrl("INVOICE", selectedInvoiceDocId, true), "_blank", "noopener,noreferrer");
+    }
+  }, [invoiceAction, selectedInvoiceDocId]);
+
+  const handleLinkedDocumentReview = async (stage: "PR" | "PO" | "GRN", reference: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => {
+    setError(null);
+    const entered = window.prompt(
+      decision === "REJECTED" && stage === "GRN"
+        ? "Enter the rejection reason for this GRN document."
+        : `Enter an optional comment for this ${stage} document.`,
+      doc.review_comment || ""
+    );
+    if (entered === null) return;
+    const comment = entered.trim();
+    if (decision === "REJECTED" && stage === "GRN" && !comment) {
+      setError("GRN rejection requires a reason.");
+      return;
+    }
+
+    try {
+      const updated = await reviewDocument(stage, reference, doc._id, decision, comment || undefined);
+      setLinkedDocs((current) => ({
+        ...current,
+        [stage]: current[stage].map((item) => (item._id === updated._id ? updated : item)),
+      }));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Unable to update document review status.");
+    }
+  };
 
   if (loading) {
     return (
@@ -677,6 +1044,19 @@ export function InvoiceModule() {
                 </div>
               </div>
 
+              <InvoiceDocumentPanel
+                invoiceNumber={activeInvoice?.invoice_number || ""}
+                docs={invoiceDocs}
+                docsLoading={invoiceDocsLoading || invoiceUploading}
+                action={invoiceAction}
+                onActionChange={setInvoiceAction}
+                onUpload={handleInvoiceUpload}
+                onReplace={handleInvoiceReplace}
+                onReview={handleInvoiceReview}
+                selectedDocumentId={selectedInvoiceDocId}
+                onSelectDocument={setSelectedInvoiceDocId}
+              />
+
               {detailLoading ? (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "32px", gap: "8px", color: "#6A6D70", fontSize: "13px" }}>
                   <LoaderCircle className="animate-spin" size={18} />
@@ -711,6 +1091,7 @@ export function InvoiceModule() {
                       reference={activeAggregate.purchase_requisition.pr_number}
                       docs={linkedDocs.PR}
                       loading={docsLoading.PR}
+                      onReview={handleLinkedDocumentReview}
                     />
                   </>
                 ) : (
@@ -744,6 +1125,7 @@ export function InvoiceModule() {
                       reference={activeAggregate.purchase_order.po_number}
                       docs={linkedDocs.PO}
                       loading={docsLoading.PO}
+                      onReview={handleLinkedDocumentReview}
                     />
                   </>
                 ) : (
@@ -778,6 +1160,7 @@ export function InvoiceModule() {
                       reference={activeAggregate.goods_receipt.grn_number}
                       docs={linkedDocs.GRN}
                       loading={docsLoading.GRN}
+                      onReview={handleLinkedDocumentReview}
                     />
                   </>
                 ) : (

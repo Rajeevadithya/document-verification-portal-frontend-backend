@@ -4,10 +4,35 @@ from datetime import datetime
 from flask import current_app
 import re
 
-ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "tiff", "bmp"}
+IMAGE_AND_PDF_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "tiff", "bmp", "tif"}
+PR_EXTRA_EXTENSIONS = {"doc", "docx", "xls", "xlsx", "csv", "txt"}
+STAGE_ALLOWED_EXTENSIONS = {
+    "PR": IMAGE_AND_PDF_EXTENSIONS | PR_EXTRA_EXTENSIONS,
+    "PO": IMAGE_AND_PDF_EXTENSIONS,
+    "GRN": IMAGE_AND_PDF_EXTENSIONS,
+    "INVOICE": IMAGE_AND_PDF_EXTENSIONS,
+}
 
-def allowed_file(filename: str) -> bool:
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def get_allowed_extensions(stage: str | None = None) -> set[str]:
+    if stage:
+        return STAGE_ALLOWED_EXTENSIONS.get(stage.upper(), IMAGE_AND_PDF_EXTENSIONS)
+    return set().union(*STAGE_ALLOWED_EXTENSIONS.values())
+
+
+def allowed_file(filename: str, stage: str | None = None) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in get_allowed_extensions(stage)
+
+
+def allowed_extensions_text(stage: str | None = None) -> str:
+    extensions = sorted(get_allowed_extensions(stage))
+    return ", ".join(extensions)
+
+
+def is_ocr_supported_file(filename: str) -> bool:
+    if "." not in filename:
+        return False
+    return filename.rsplit(".", 1)[1].lower() in IMAGE_AND_PDF_EXTENSIONS
 
 def serialize_doc(doc: dict) -> dict:
     """Recursively convert ObjectId and datetime to JSON-serializable types."""

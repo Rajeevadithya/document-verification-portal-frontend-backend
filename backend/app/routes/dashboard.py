@@ -48,6 +48,12 @@ def dashboard_summary():
     ocr_pending = db.documents.count_documents({"is_active": True, "ocr_status": "PENDING"})
 
     unread_notifs = db.notifications.count_documents({"is_read": False})
+    accepted_docs = db.documents.count_documents({"is_active": True, "review_status": "ACCEPTED"})
+    rejected_docs = db.documents.count_documents({"is_active": True, "review_status": "REJECTED"})
+    pending_review_docs = db.documents.count_documents({
+        "is_active": True,
+        "$or": [{"review_status": {"$exists": False}}, {"review_status": "PENDING"}]
+    })
 
     miro_sent = db.invoice_verifications.count_documents({"status": "SENT_TO_MIRO"})
 
@@ -69,6 +75,33 @@ def dashboard_summary():
             "invalid": ocr_invalid,
             "review":  ocr_review,
             "pending": ocr_pending
+        },
+        "approval_summary": {
+            "accepted": accepted_docs,
+            "rejected": rejected_docs,
+            "pending": pending_review_docs
+        },
+        "approval_status": {
+            "PR": {
+                "accepted": db.documents.count_documents({"stage": "PR", "is_active": True, "review_status": "ACCEPTED"}),
+                "rejected": db.documents.count_documents({"stage": "PR", "is_active": True, "review_status": "REJECTED"}),
+                "pending": db.documents.count_documents({"stage": "PR", "is_active": True, "$or": [{"review_status": {"$exists": False}}, {"review_status": "PENDING"}]}),
+            },
+            "PO": {
+                "accepted": db.documents.count_documents({"stage": "PO", "is_active": True, "review_status": "ACCEPTED"}),
+                "rejected": db.documents.count_documents({"stage": "PO", "is_active": True, "review_status": "REJECTED"}),
+                "pending": db.documents.count_documents({"stage": "PO", "is_active": True, "$or": [{"review_status": {"$exists": False}}, {"review_status": "PENDING"}]}),
+            },
+            "GRN": {
+                "accepted": db.documents.count_documents({"stage": "GRN", "is_active": True, "review_status": "ACCEPTED"}),
+                "rejected": db.documents.count_documents({"stage": "GRN", "is_active": True, "review_status": "REJECTED"}),
+                "pending": db.documents.count_documents({"stage": "GRN", "is_active": True, "$or": [{"review_status": {"$exists": False}}, {"review_status": "PENDING"}]}),
+            },
+            "INVOICE": {
+                "accepted": db.documents.count_documents({"stage": "INVOICE", "is_active": True, "review_status": "ACCEPTED"}),
+                "rejected": db.documents.count_documents({"stage": "INVOICE", "is_active": True, "review_status": "REJECTED"}),
+                "pending": db.documents.count_documents({"stage": "INVOICE", "is_active": True, "$or": [{"review_status": {"$exists": False}}, {"review_status": "PENDING"}]}),
+            }
         },
         "notifications": {
             "unread": unread_notifs
@@ -99,13 +132,25 @@ def stage_status():
 
             docs = list(db.documents.find(
                 {"stage": stage_key, "reference_number": ref, "is_active": True},
-                {"ocr_status": 1, "original_filename": 1, "uploaded_at": 1, "_id": 1}
-            ))
+                {
+                    "ocr_status": 1,
+                    "original_filename": 1,
+                    "uploaded_at": 1,
+                    "review_status": 1,
+                    "review_comment": 1,
+                    "reviewed_by": 1,
+                    "reviewed_at": 1,
+                    "_id": 1,
+                }
+            ).sort("uploaded_at", -1))
+            latest_doc = docs[0] if docs else None
             result.append({
                 "reference_number": ref,
                 "record_status": rec.get("status", "UNKNOWN"),
                 "document_count": len(docs),
                 "has_document": len(docs) > 0,
+                "approval_status": latest_doc.get("review_status", "PENDING") if latest_doc else "NOT_UPLOADED",
+                "latest_document": serialize_doc(latest_doc) if latest_doc else None,
                 "documents": serialize_doc(docs)
             })
         return result
@@ -128,7 +173,7 @@ def recent_activity():
         .find(
             {"is_active": True},
             {"stage": 1, "reference_number": 1, "original_filename": 1,
-             "ocr_status": 1, "uploaded_at": 1, "_id": 1}
+             "ocr_status": 1, "uploaded_at": 1, "review_status": 1, "reviewed_at": 1, "_id": 1}
         )
         .sort("uploaded_at", -1)
         .limit(limit)

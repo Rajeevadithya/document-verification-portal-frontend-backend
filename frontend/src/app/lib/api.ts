@@ -11,7 +11,6 @@ import type {
   PORecord,
   PRItem,
   PRRecord,
-  RecentActivityItem,
   StageDocument,
   StageKey,
   StageStatusRecord,
@@ -58,6 +57,10 @@ function normalizeStageDocument(document: any): StageDocument {
     ocr_status: (document?.ocr_status || "PENDING") as StageDocument["ocr_status"],
     ocr_result: document?.ocr_result,
     ocr_rejection_detail: document?.ocr_rejection_detail ?? null,
+    review_status: (document?.review_status || "PENDING") as StageDocument["review_status"],
+    review_comment: typeof document?.review_comment === "string" ? document.review_comment : null,
+    reviewed_by: document?.reviewed_by ? asString(document.reviewed_by) : null,
+    reviewed_at: document?.reviewed_at ? asString(document.reviewed_at) : null,
     version: toNumber(document?.version, 1),
     is_active: Boolean(document?.is_active),
     uploaded_by: document?.uploaded_by ? asString(document.uploaded_by) : undefined,
@@ -242,11 +245,40 @@ export async function getDashboardSummary() {
 }
 
 export async function getDashboardStages() {
-  return request<Record<StageKey, StageStatusRecord[]>>("/dashboard/stages");
+  const data = await request<Record<StageKey, any[]>>("/dashboard/stages");
+  return Object.fromEntries(
+    Object.entries(data).map(([stage, records]) => [
+      stage,
+      (records || []).map((record: any) => ({
+        reference_number: asString(record?.reference_number),
+        record_status: asString(record?.record_status),
+        document_count: toNumber(record?.document_count),
+        has_document: Boolean(record?.has_document),
+        approval_status: asString(record?.approval_status),
+        latest_document: record?.latest_document ? normalizeStageDocument(record.latest_document) : null,
+        documents: Array.isArray(record?.documents) ? record.documents.map(normalizeStageDocument) : [],
+      })),
+    ])
+  ) as Record<StageKey, StageStatusRecord[]>;
 }
 
 export async function getRecentActivity(limit = 10) {
-  return request<{ activities: RecentActivityItem[]; count: number }>(`/dashboard/recent-activity?limit=${limit}`);
+  const data = await request<{ activities: any[]; count: number }>(`/dashboard/recent-activity?limit=${limit}`);
+  return {
+    activities: Array.isArray(data.activities)
+      ? data.activities.map((item) => ({
+          _id: asString(item?._id),
+          stage: (item?.stage || "PR") as StageKey,
+          reference_number: asString(item?.reference_number),
+          original_filename: asString(item?.original_filename),
+          ocr_status: asString(item?.ocr_status),
+          review_status: asString(item?.review_status),
+          reviewed_at: item?.reviewed_at ? asString(item.reviewed_at) : null,
+          uploaded_at: asString(item?.uploaded_at),
+        }))
+      : [],
+    count: toNumber(data.count),
+  };
 }
 
 export async function getNotifications(limit = 20, unreadOnly = false) {
@@ -430,6 +462,22 @@ export async function replaceDocument(stage: StageKey, referenceNumber: string, 
   const data = await request<any>(`/${route}/${referenceNumber}/documents/${documentId}/change`, {
     method: "PUT",
     body: formData,
+  });
+  return normalizeStageDocument(data);
+}
+
+export async function reviewDocument(stage: StageKey, referenceNumber: string, documentId: string, decision: "ACCEPTED" | "REJECTED", comment?: string) {
+  const route = ROUTE_MAP[stage];
+  const data = await request<any>(`/${route}/${referenceNumber}/documents/${documentId}/review`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      decision,
+      comment,
+      reviewed_by: DEFAULT_UPLOADER,
+    }),
   });
   return normalizeStageDocument(data);
 }

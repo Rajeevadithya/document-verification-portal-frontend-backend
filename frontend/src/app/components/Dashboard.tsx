@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { FileText, ShoppingCart, Truck } from "lucide-react";
+import { CheckCircle2, Clock3, FileText, ShoppingCart, Truck, XCircle } from "lucide-react";
 import { getDashboardStages, getDashboardSummary, getRecentActivity } from "../lib/api";
 import { formatDateTime, statusTone } from "../lib/format";
 import type { DashboardSummary, RecentActivityItem, StageKey, StageStatusRecord } from "../lib/types";
@@ -10,6 +10,13 @@ type SummaryRow = {
   uploaded: number;
   missing: number;
   ocrReview: number;
+};
+
+type ApprovalRow = {
+  type: string;
+  accepted: number;
+  rejected: number;
+  pending: number;
 };
 
 function stageLabel(stage: StageKey) {
@@ -73,6 +80,48 @@ export function Dashboard() {
     return [...rows, totals];
   }, [stages, summary]);
 
+  const approvalRows = useMemo<ApprovalRow[]>(() => {
+    if (!summary) return [];
+    const rows: ApprovalRow[] = ["PR", "PO", "GRN"].map((stage) => ({
+      type: stageLabel(stage as StageKey),
+      accepted: summary.approval_status[stage as StageKey].accepted,
+      rejected: summary.approval_status[stage as StageKey].rejected,
+      pending: summary.approval_status[stage as StageKey].pending,
+    }));
+
+    const totals = rows.reduce(
+      (acc, row) => ({
+        type: "Total",
+        accepted: acc.accepted + row.accepted,
+        rejected: acc.rejected + row.rejected,
+        pending: acc.pending + row.pending,
+      }),
+      { type: "Total", accepted: 0, rejected: 0, pending: 0 }
+    );
+
+    return [...rows, totals];
+  }, [summary]);
+
+  const latestDecisions = useMemo(() => {
+    if (!stages) return [];
+    return (["PR", "PO", "GRN"] as StageKey[])
+      .flatMap((stage) =>
+        stages[stage]
+          .filter((item) => item.latest_document)
+          .map((item) => ({
+            stage,
+            reference_number: item.reference_number,
+            document: item.latest_document!,
+          }))
+      )
+      .sort((a, b) => {
+        const aDate = a.document.reviewed_at || a.document.uploaded_at;
+        const bDate = b.document.reviewed_at || b.document.uploaded_at;
+        return new Date(bDate).getTime() - new Date(aDate).getTime();
+      })
+      .slice(0, 8);
+  }, [stages]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full" style={{ color: "#6A6D70" }}>
@@ -111,6 +160,9 @@ export function Dashboard() {
               { label: "Total PR Documents", value: summary.document_upload_status.PR.with_docs, sub: `${summary.document_upload_status.PR.missing} not uploaded`, icon: FileText, color: "#0070F2", bg: "#E8F1FB" },
               { label: "Total PO Documents", value: summary.document_upload_status.PO.with_docs, sub: `${summary.document_upload_status.PO.missing} not uploaded`, icon: ShoppingCart, color: "#107E3E", bg: "#EEF5EC" },
               { label: "Total GRN Documents", value: summary.document_upload_status.GRN.with_docs, sub: `${summary.document_upload_status.GRN.missing} not uploaded`, icon: Truck, color: "#E9730C", bg: "#FEF3E8" },
+              { label: "Accepted Uploads", value: summary.approval_summary.accepted, sub: "Documents approved by reviewer", icon: CheckCircle2, color: "#107E3E", bg: "#EEF5EC" },
+              { label: "Rejected Uploads", value: summary.approval_summary.rejected, sub: "Documents rejected by reviewer", icon: XCircle, color: "#BB0000", bg: "#FBEAEA" },
+              { label: "Pending Review", value: summary.approval_summary.pending, sub: "Documents waiting for decision", icon: Clock3, color: "#E9730C", bg: "#FEF3E8" },
             ].map((card) => (
               <div
                 key={card.label}
@@ -192,6 +244,82 @@ export function Dashboard() {
                         <div style={{ fontSize: "11px", color: "#8a8b8c" }}>{activity.stage} {activity.reference_number} • {formatDateTime(activity.uploaded_at)}</div>
                       </div>
                       <span style={{ fontSize: "11px", color: tone.color, backgroundColor: tone.bg, padding: "2px 6px", borderRadius: "2px", fontWeight: "600" }}>{activity.ocr_status}</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="border overflow-hidden" style={{ backgroundColor: "#ffffff", borderColor: "#d9d9d9", borderRadius: "18px" }}>
+            <div className="px-4 py-2 border-b flex items-center justify-between" style={{ borderColor: "#d9d9d9", backgroundColor: "#f5f5f5" }}>
+              <span style={{ fontSize: "13px", fontWeight: "600", color: "#32363a" }}>Approval Summary</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full" style={{ borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ backgroundColor: "#f5f5f5", borderBottom: "1px solid #d9d9d9" }}>
+                    {["Document Type", "Accepted", "Rejected", "Pending"].map((label) => (
+                      <th
+                        key={label}
+                        className="text-left"
+                        style={{ padding: "6px 12px", fontSize: "12px", fontWeight: "600", color: "#32363a", borderRight: "1px solid #e5e5e5", whiteSpace: "nowrap" }}
+                      >
+                        {label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {approvalRows.map((row, i) => (
+                    <tr key={row.type} style={{ borderBottom: "1px solid #eeeeee", backgroundColor: row.type === "Total" ? "#f5f5f5" : i % 2 === 0 ? "#ffffff" : "#fafafa" }}>
+                      <td style={{ padding: "6px 12px", fontSize: "12px", color: "#32363a", fontWeight: row.type === "Total" ? "600" : "400", borderRight: "1px solid #e5e5e5" }}>{row.type}</td>
+                      <td style={{ padding: "6px 12px", fontSize: "12px", color: "#107E3E", borderRight: "1px solid #e5e5e5", textAlign: "right" }}>{row.accepted}</td>
+                      <td style={{ padding: "6px 12px", fontSize: "12px", color: "#BB0000", borderRight: "1px solid #e5e5e5", textAlign: "right" }}>{row.rejected}</td>
+                      <td style={{ padding: "6px 12px", fontSize: "12px", color: "#E9730C", textAlign: "right" }}>{row.pending}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="border overflow-hidden" style={{ backgroundColor: "#ffffff", borderColor: "#d9d9d9", borderRadius: "18px" }}>
+            <div className="px-4 py-2 border-b" style={{ borderColor: "#d9d9d9", backgroundColor: "#f5f5f5" }}>
+              <span style={{ fontSize: "13px", fontWeight: "600", color: "#32363a" }}>Latest Approval Decisions</span>
+            </div>
+            <div>
+              {latestDecisions.length === 0 ? (
+                <div style={{ padding: "16px", fontSize: "12px", color: "#8a8b8c" }}>No approval decisions yet.</div>
+              ) : (
+                latestDecisions.map((item, index) => {
+                  const tone = statusTone(item.document.review_status);
+                  return (
+                    <div
+                      key={`${item.stage}-${item.reference_number}-${item.document._id}`}
+                      className="px-4 py-3 border-b"
+                      style={{ borderColor: index === latestDecisions.length - 1 ? "transparent" : "#eeeeee" }}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div style={{ fontSize: "12px", color: "#32363a", fontWeight: "500" }}>
+                            {item.stage} {item.reference_number}
+                          </div>
+                          <div style={{ fontSize: "11px", color: "#8a8b8c" }}>
+                            {item.document.original_filename} • {formatDateTime(item.document.reviewed_at || item.document.uploaded_at)}
+                          </div>
+                          {item.document.review_comment ? (
+                            <div style={{ fontSize: "11px", color: "#6A6D70", marginTop: "4px" }}>
+                              {item.document.review_comment}
+                            </div>
+                          ) : null}
+                        </div>
+                        <span style={{ fontSize: "11px", color: tone.color, backgroundColor: tone.bg, padding: "2px 6px", borderRadius: "2px", fontWeight: "600" }}>
+                          {item.document.review_status}
+                        </span>
+                      </div>
                     </div>
                   );
                 })

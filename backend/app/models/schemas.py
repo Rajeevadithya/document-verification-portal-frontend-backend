@@ -112,6 +112,10 @@ Collection: documents
         "raw_text_snippet": str,
         "issues": [str]
     },
+    "review_status": str,           # PENDING | ACCEPTED | REJECTED
+    "review_comment": str | None,
+    "reviewed_by": str | None,
+    "reviewed_at": datetime | None,
     "version": int,                 # increments on change
     "is_active": bool,
     "uploaded_at": datetime,
@@ -154,6 +158,8 @@ def init_indexes():
 
     db.documents.create_index([("stage", 1), ("reference_number", 1)])
     db.documents.create_index("is_active")
+    db.documents.create_index("review_status")
+    db.documents.create_index("reviewed_at")
 
     db.notifications.create_index("is_read")
     db.notifications.create_index([("stage", 1), ("reference_number", 1)])

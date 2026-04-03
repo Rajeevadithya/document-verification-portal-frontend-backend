@@ -12,6 +12,10 @@ def create_app():
 
     CORS(app, resources={r"/api/*": {"origins": "*"}})
     mongo.init_app(app)
+    from .models.schemas import init_indexes, init_document_audit_log_indexes
+    with app.app_context():
+        init_indexes()
+        init_document_audit_log_indexes()
 
     import os
     for folder in ["pr", "po", "grn", "invoice"]:

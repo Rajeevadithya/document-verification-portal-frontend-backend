@@ -30,7 +30,7 @@ export function formatFileSize(bytes?: number | null) {
 
 export function statusTone(status?: string | null) {
   const normalized = (status || "").toUpperCase();
-  if (["VALID", "APPROVED", "POSTED", "COMPLETED", "SENT_TO_MIRO", "CLOSED"].includes(normalized)) {
+  if (["VALID", "APPROVED", "ACCEPTED", "POSTED", "COMPLETED", "SENT_TO_MIRO", "CLOSED"].includes(normalized)) {
     return { color: "#107E3E", bg: "#EEF5EC" };
   }
   if (["REVIEW", "PENDING", "IN_PROGRESS"].includes(normalized)) {

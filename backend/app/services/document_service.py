@@ -89,7 +89,36 @@ def _build_ocr_failure_message(stage: str, reference_number: str, rejection_deta
 
 
 def _should_block_for_ocr(stage: str, ocr_result: dict) -> bool:
-    return stage.upper() in {"PR", "PO", "GRN"} and ocr_result.get("ocr_status") != "VALID"
+    stage_upper = stage.upper()
+    ocr_status = ocr_result.get("ocr_status")
+    if stage_upper == "PO":
+        return (ocr_result.get("document_type_detected") or "").upper() == "GRN"
+    if stage_upper == "GRN":
+        return ocr_status != "VALID"
+    if stage_upper == "PR":
+        return ocr_status not in {"VALID", "PENDING"}
+    return False
+
+
+def _get_stage_route(stage: str, reference_number: str, action: str = "view") -> str:
+    stage_upper = stage.upper()
+    if stage_upper == "INVOICE":
+        return f"/documents?tab=INV&doc={reference_number}"
+    return f"/documents/{stage_upper.lower()}/{reference_number}?action={action}"
+
+
+def _create_notification(notification_type: str, stage: str, reference_number: str,
+                         message: str, action_label: str, action_route: str):
+    mongo.db.notifications.insert_one({
+        "type": notification_type,
+        "stage": stage.upper(),
+        "reference_number": reference_number,
+        "message": message,
+        "action_label": action_label,
+        "action_route": action_route,
+        "is_read": False,
+        "created_at": datetime.utcnow()
+    })
 
 
 # ── public API ────────────────────────────────────────────────────────────────
@@ -164,6 +193,10 @@ def save_document(file_obj, stage: str, reference_number: str,
         "ocr_rejection_detail": ocr_rejection_detail,
         "version": 1,
         "is_active": True,
+        "review_status": "PENDING",
+        "review_comment": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
         "uploaded_by": uploader,
         "uploaded_at": now,
         "updated_at": now
@@ -190,7 +223,8 @@ def save_document(file_obj, stage: str, reference_number: str,
             "ocr_status": ocr_result["ocr_status"],
             "ocr_confidence": ocr_result.get("confidence"),
             "ocr_issues": ocr_result.get("issues", []),
-            "version": 1
+            "version": 1,
+            "review_status": "PENDING"
         }
     )
 
@@ -285,6 +319,10 @@ def change_document(document_id: str, file_obj, stage: str,
         "ocr_rejection_detail": ocr_rejection_detail,
         "version": new_version,
         "is_active": True,
+        "review_status": "PENDING",
+        "review_comment": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
         "uploaded_by": uploader,
         "uploaded_at": now,
         "updated_at": now
@@ -312,7 +350,8 @@ def change_document(document_id: str, file_obj, stage: str,
             "ocr_confidence": ocr_result.get("confidence"),
             "ocr_issues": ocr_result.get("issues", []),
             "version": new_version,
-            "replaced_document_id": document_id
+            "replaced_document_id": document_id,
+            "review_status": "PENDING"
         }
     )
 
@@ -332,6 +371,70 @@ def get_active_documents(stage: str, reference_number: str) -> list:
 def get_document_by_id(document_id: str) -> dict | None:
     doc = mongo.db.documents.find_one({"_id": ObjectId(document_id)})
     return _serialize_one(doc)
+
+
+def review_document(document_id: str, decision: str, comment: str | None = None,
+                    reviewed_by: str | None = None) -> dict | None:
+    existing = mongo.db.documents.find_one({"_id": ObjectId(document_id), "is_active": True})
+    if not existing:
+        return None
+
+    decision_upper = (decision or "").upper()
+    if decision_upper not in {"ACCEPTED", "REJECTED"}:
+        raise ValueError("Decision must be ACCEPTED or REJECTED.")
+
+    stage = (existing.get("stage") or "").upper()
+    if stage == "GRN" and decision_upper == "REJECTED" and not (comment or "").strip():
+        raise ValueError("Rejection reason is required for GRN documents.")
+
+    reviewer = reviewed_by or _resolve_uploader()
+    reviewed_at = datetime.utcnow()
+    clean_comment = (comment or "").strip() or None
+
+    mongo.db.documents.update_one(
+        {"_id": ObjectId(document_id)},
+        {"$set": {
+            "review_status": decision_upper,
+            "review_comment": clean_comment,
+            "reviewed_by": reviewer,
+            "reviewed_at": reviewed_at,
+            "updated_at": reviewed_at,
+        }}
+    )
+
+    updated = mongo.db.documents.find_one({"_id": ObjectId(document_id)})
+    reference_number = existing.get("reference_number")
+
+    _write_audit_log(
+        action=f"DOCUMENT_{decision_upper}",
+        document_id=document_id,
+        stage=stage,
+        reference_number=reference_number,
+        performed_by=reviewer,
+        details={
+            "decision": decision_upper,
+            "comment": clean_comment,
+            "reviewed_at": reviewed_at.isoformat(),
+            "original_filename": existing.get("original_filename"),
+            "version": existing.get("version", 1),
+        }
+    )
+
+    notification_message = (
+        f"{stage} {reference_number} document {decision_upper.lower()}."
+        if not clean_comment else
+        f"{stage} {reference_number} document {decision_upper.lower()}. Comment: {clean_comment}"
+    )
+    _create_notification(
+        f"DOCUMENT_{decision_upper}",
+        stage,
+        reference_number,
+        notification_message,
+        "View Document",
+        _get_stage_route(stage, reference_number, "view"),
+    )
+
+    return _serialize_one(updated)
 
 
 def delete_document(document_id: str, stage: str = None, reference_number: str = None, deleted_by: str = None) -> dict | None:
@@ -379,16 +482,14 @@ def delete_document(document_id: str, stage: str = None, reference_number: str =
         "is_active": True
     })
     if active_remaining == 0:
-        mongo.db.notifications.insert_one({
-            "type": "MISSING_DOCUMENT",
-            "stage": resolved_stage,
-            "reference_number": resolved_reference,
-            "message": f"Document missing for {resolved_stage} {resolved_reference}. Please upload a replacement.",
-            "action_label": "Upload Document",
-            "action_route": "/documents",
-            "is_read": False,
-            "created_at": now
-        })
+        _create_notification(
+            "MISSING_DOCUMENT",
+            resolved_stage,
+            resolved_reference,
+            f"Document missing for {resolved_stage} {resolved_reference}. Please upload a replacement.",
+            "Upload Document",
+            _get_stage_route(resolved_stage, resolved_reference, "upload"),
+        )
 
     deleted = existing
     deleted["is_active"] = False
@@ -471,36 +572,43 @@ def _guess_mime(filename: str) -> str:
         "jpg": "image/jpeg",
         "jpeg": "image/jpeg",
         "tiff": "image/tiff",
-        "bmp": "image/bmp"
+        "tif": "image/tiff",
+        "bmp": "image/bmp",
+        "doc": "application/msword",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls": "application/vnd.ms-excel",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "csv": "text/csv",
+        "txt": "text/plain",
     }
     return MAP.get(ext, "application/octet-stream")
 
 
 def _create_ocr_notification(stage: str, reference_number: str, ocr_result: dict):
-    stage_route_map = {
-        "PR": f"/document-uploads/pr/upload?pr={reference_number}",
-        "PO": f"/document-uploads/po/upload?po={reference_number}",
-        "GRN": f"/document-uploads/grn/upload?grn={reference_number}",
-        "INVOICE": f"/document-uploads/invoice/upload?inv={reference_number}"
-    }
     issues_str = "; ".join(ocr_result.get("issues", []))
-    mongo.db.notifications.insert_one({
-        "type": "OCR_REVIEW" if ocr_result["ocr_status"] == "REVIEW" else "OCR_FAILED",
-        "stage": stage.upper(),
-        "reference_number": reference_number,
-        "message": f"OCR {ocr_result['ocr_status']} for {stage.upper()} {reference_number}: {issues_str}",
-        "action_label": "View Document",
-        "action_route": stage_route_map.get(stage.upper(), "/document-uploads"),
-        "is_read": False,
-        "created_at": datetime.utcnow()
-    })
+    _create_notification(
+        "OCR_REVIEW" if ocr_result["ocr_status"] == "REVIEW" else "OCR_FAILED",
+        stage,
+        reference_number,
+        f"OCR {ocr_result['ocr_status']} for {stage.upper()} {reference_number}: {issues_str}",
+        "View Document",
+        _get_stage_route(stage, reference_number, "view"),
+    )
 
 
 def _serialize_one(doc) -> dict | None:
     if not doc:
         return None
     doc["_id"] = str(doc["_id"])
-    for key in ("uploaded_at", "updated_at"):
+    if "review_status" not in doc:
+        doc["review_status"] = "PENDING"
+    if "review_comment" not in doc:
+        doc["review_comment"] = None
+    if "reviewed_by" not in doc:
+        doc["reviewed_by"] = None
+    if "reviewed_at" not in doc:
+        doc["reviewed_at"] = None
+    for key in ("uploaded_at", "updated_at", "reviewed_at", "deleted_at"):
         if key in doc and isinstance(doc[key], datetime):
             doc[key] = doc[key].isoformat()
     return doc

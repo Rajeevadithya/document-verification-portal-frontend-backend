@@ -13,6 +13,7 @@ import re
 import logging
 
 logger = logging.getLogger(__name__)
+OCR_SUPPORTED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg", "tiff", "bmp", "tif"}
 
 # ── keyword maps for document-type detection ──────────────────────────────────
 STAGE_KEYWORDS = {
@@ -105,6 +106,7 @@ def validate_document(file_path: str, stage: str, reference_number: str,
     }
     """
     issues = []
+    ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
 
     if not os.path.exists(file_path):
         return {
@@ -115,6 +117,17 @@ def validate_document(file_path: str, stage: str, reference_number: str,
             "confidence": 0.0,
             "raw_text_snippet": "",
             "issues": ["File not found on server"]
+        }
+
+    if ext not in OCR_SUPPORTED_EXTENSIONS:
+        return {
+            "ocr_status": "PENDING",
+            "document_type_detected": None,
+            "expected_number_found": False,
+            "cross_reference_valid": False,
+            "confidence": 0.0,
+            "raw_text_snippet": "",
+            "issues": [f"OCR skipped for unsupported file type '.{ext}'."]
         }
 
     raw_text = extract_text(file_path)
@@ -132,6 +145,8 @@ def validate_document(file_path: str, stage: str, reference_number: str,
         issues.append(
             f"Document appears to be a {detected_stage} document, expected {stage.upper()}."
         )
+        if stage.upper() == "PO" and detected_stage == "GRN":
+            issues.append("GRN documents cannot be uploaded in the PO document slot.")
     elif type_unknown and not expected_number_found:
         issues.append(f"Could not confidently identify document type for {stage.upper()}.")
 
@@ -164,6 +179,8 @@ def validate_document(file_path: str, stage: str, reference_number: str,
 
     if stage.upper() == "PO":
         score = type_score + (0.35 if num_ok else 0.0) + (0.25 if xref_ok else 0.0)
+        if detected_stage == "GRN":
+            score = 0.0
     else:
         score = type_score + (0.5 if num_ok else 0.0)
 

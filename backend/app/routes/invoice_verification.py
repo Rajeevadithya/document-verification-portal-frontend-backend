@@ -18,7 +18,7 @@ from backend.app.utils.helpers import (
     format_grn_sections, format_po_sections, format_pr_sections, serialize_doc, success_response, error_response, allowed_file
 )
 from backend.app.services.document_service import (
-    save_document, change_document, delete_document, get_active_documents, get_document_by_id
+    save_document, change_document, delete_document, get_active_documents, get_document_by_id, review_document
 )
 
 inv_bp = Blueprint("invoice_verification", __name__)
@@ -143,6 +143,29 @@ def view_invoice_documents(invoice_number):
         "Documents fetched"
     )
 
+
+@inv_bp.route("/<invoice_number>/documents/<doc_id>/review", methods=["PUT"])
+def review_invoice_document(invoice_number, doc_id):
+    inv = mongo.db.invoice_verifications.find_one({"invoice_number": invoice_number})
+    if not inv:
+        return error_response(f"Invoice '{invoice_number}' not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    decision = (body.get("decision") or "").upper()
+    comment = body.get("comment")
+    reviewed_by = body.get("reviewed_by")
+
+    doc = get_document_by_id(doc_id)
+    if not doc or doc.get("stage") != "INVOICE" or doc.get("reference_number") != invoice_number:
+        return error_response("Document not found", 404)
+
+    try:
+        reviewed = review_document(doc_id, decision, comment=comment, reviewed_by=reviewed_by)
+    except ValueError as e:
+        return error_response(str(e), 400)
+
+    return success_response(reviewed, f"Invoice document {decision.lower()} successfully")
+
 @inv_bp.route("/documents/<doc_id>", methods=["DELETE"])
 def delete_invoice_document(doc_id):
     doc = get_document_by_id(doc_id)
@@ -195,7 +218,7 @@ def miro_redirect(invoice_number):
         "reference_number": invoice_number,
         "message": f"Invoice {invoice_number} has been sent to SAP MIRO for processing.",
         "action_label": "View Invoice",
-        "action_route": f"/document-uploads/invoice?inv={invoice_number}",
+        "action_route": f"/documents?tab=INV&doc={invoice_number}",
         "is_read": False,
         "created_at": datetime.utcnow()
     })

@@ -22,6 +22,19 @@ function getProcurementDetailRoute(stage: "PR" | "PO" | "GRN", reference: string
   return `/documents/${stage.toLowerCase()}/${encodeURIComponent(reference)}${suffix}`;
 }
 
+function getNotificationRoute(notification: NotificationItem) {
+  if (notification.action_route?.startsWith("/documents")) {
+    return notification.action_route;
+  }
+
+  const tab = stageToTab(notification.stage);
+  if (tab === "PR" || tab === "PO" || tab === "GRN") {
+    const defaultAction = notification.type === "MISSING_DOCUMENT" ? "upload" : "view";
+    return getProcurementDetailRoute(tab, notification.reference_number, defaultAction);
+  }
+  return `/documents?tab=INV&doc=${encodeURIComponent(notification.reference_number)}`;
+}
+
 export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -68,12 +81,7 @@ export function Layout() {
     }
     await loadNotifications();
     setNotifOpen(false);
-    const tab = stageToTab(notification.stage);
-    if (tab === "PR" || tab === "PO" || tab === "GRN") {
-      navigate(getProcurementDetailRoute(tab, notification.reference_number));
-      return;
-    }
-    navigate(`/documents?tab=INV&doc=${encodeURIComponent(notification.reference_number)}`);
+    navigate(getNotificationRoute(notification));
   };
 
   const markAllRead = async () => {

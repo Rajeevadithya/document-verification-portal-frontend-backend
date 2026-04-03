@@ -34,6 +34,16 @@ export type DashboardSummary = {
     review: number;
     pending: number;
   };
+  approval_summary: {
+    accepted: number;
+    rejected: number;
+    pending: number;
+  };
+  approval_status: Record<StageKey, {
+    accepted: number;
+    rejected: number;
+    pending: number;
+  }>;
   notifications: {
     unread: number;
   };
@@ -73,6 +83,10 @@ export type StageDocument = {
     what_ocr_read?: string;
     overall_advice?: string;
   } | null;
+  review_status: "PENDING" | "ACCEPTED" | "REJECTED";
+  review_comment?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
   version: number;
   is_active: boolean;
   uploaded_by?: string;
@@ -85,6 +99,8 @@ export type StageStatusRecord = {
   record_status: string;
   document_count: number;
   has_document: boolean;
+  approval_status?: string;
+  latest_document?: StageDocument | null;
   documents: StageDocument[];
 };
 
@@ -94,6 +110,8 @@ export type RecentActivityItem = {
   reference_number: string;
   original_filename: string;
   ocr_status: string;
+  review_status?: string;
+  reviewed_at?: string | null;
   uploaded_at: string;
 };
 

@@ -20,7 +20,7 @@ import {
   replaceDocument,
   uploadDocuments,
 } from "../../lib/api";
-import { formatCurrency, formatDate, formatFileSize } from "../../lib/format";
+import { formatCurrency, formatDate } from "../../lib/format";
 import type {
   FrontendStageKey,
   GRNRecord,
@@ -75,6 +75,16 @@ const TD: React.CSSProperties = {
 // ─── Stage meta ──────────────────────────────────────────────────────────────────
 
 const SAP_BLUE = "#0070F2";
+const FILE_ACCEPT_BY_STAGE: Record<Exclude<FrontendStageKey, "INV">, string> = {
+  PR: ".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.doc,.docx,.xls,.xlsx,.csv,.txt",
+  PO: ".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp",
+  GRN: ".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp",
+};
+const FILE_LABEL_BY_STAGE: Record<Exclude<FrontendStageKey, "INV">, string> = {
+  PR: "PDF, image, DOC, DOCX, XLS, XLSX, CSV, TXT",
+  PO: "PDF and image files only",
+  GRN: "PDF and image files only",
+};
 
 const STAGE_META: Record<Exclude<FrontendStageKey, "INV">, {
   label: string;
@@ -165,6 +175,20 @@ function StatusBadge({ text }: { text: string }) {
       display: "inline-block",
     }}>
       {text}
+    </span>
+  );
+}
+
+function ReviewBadge({ status }: { status: StageDocument["review_status"] }) {
+  const tone =
+    status === "ACCEPTED"
+      ? { color: "#107E3E", bg: "#EEF5EC" }
+      : status === "REJECTED"
+        ? { color: "#BB0000", bg: "#FBEAEA" }
+        : { color: "#E9730C", bg: "#FEF3E8" };
+  return (
+    <span style={{ fontSize: "11px", fontWeight: "700", color: tone.color, backgroundColor: tone.bg, padding: "3px 10px", borderRadius: "6px", display: "inline-block" }}>
+      {status}
     </span>
   );
 }
@@ -266,6 +290,8 @@ function DocumentsPanel({
   docs,
   docsLoading,
   canModify,
+  selectedDocumentId,
+  onSelectDocument,
   onReplace,
   onDelete,
 }: {
@@ -274,6 +300,8 @@ function DocumentsPanel({
   docs: StageDocument[];
   docsLoading: boolean;
   canModify: boolean;
+  selectedDocumentId: string | null;
+  onSelectDocument: (docId: string) => void;
   onReplace: (ref: string, docId: string) => void;
   onDelete: (docId: string) => Promise<void>;
 }) {
@@ -285,12 +313,14 @@ function DocumentsPanel({
         borderBottom: "1px solid #dbeafe",
         display: "flex",
         alignItems: "center",
-        gap: "8px",
+        gap: "12px",
       }}>
-        <Paperclip size={13} color="#1d4ed8" />
-        <span style={{ fontSize: "12px", fontWeight: "700", color: "#1e40af" }}>
-          Uploaded Documents ({docsLoading ? "…" : docs.length})
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <Paperclip size={13} color="#1d4ed8" />
+          <span style={{ fontSize: "12px", fontWeight: "700", color: "#1e40af" }}>
+            Uploaded Documents ({docsLoading ? "…" : docs.length})
+          </span>
+        </div>
       </div>
 
       {docsLoading ? (
@@ -302,7 +332,7 @@ function DocumentsPanel({
           <table style={{ borderCollapse: "collapse", width: "100%", minWidth: "900px" }}>
             <thead>
               <tr>
-                {["File Name", "Reference", "Version", "Upload Date", "Uploaded By", "Size", "Actions"].map((c) => (
+                {["File Name", "Reference", "Version", "Upload Date", "Decision", "Comment", "Actions"].map((c) => (
                   <th key={c} style={TH}>{c}</th>
                 ))}
               </tr>
@@ -320,15 +350,16 @@ function DocumentsPanel({
                   <td style={TD}>{reference}</td>
                   <td style={TD}>v{doc.version}</td>
                   <td style={TD}>{formatDate(doc.uploaded_at)}</td>
-                  <td style={TD}>{doc.uploaded_by || "system"}</td>
-                  <td style={TD}>{formatFileSize(doc.file_size)}</td>
+                  <td style={TD}><ReviewBadge status={doc.review_status} /></td>
+                  <td style={{ ...TD, maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.review_comment || "—"}</td>
                   <td style={{ ...TD, borderRight: "none" }}>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                       <a
                         href={getDocumentDownloadUrl(stageKey, doc._id, true)}
                         target="_blank"
                         rel="noreferrer"
-                        style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #0070F2", color: "#0070F2", borderRadius: "7px", fontSize: "11px", fontWeight: "600", textDecoration: "none", backgroundColor: "#ffffff" }}
+                        onClick={() => onSelectDocument(doc._id)}
+                        style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: `1px solid ${selectedDocumentId === doc._id ? "#0070F2" : "#d9d9d9"}`, color: "#0070F2", borderRadius: "7px", fontSize: "11px", fontWeight: "600", textDecoration: "none", backgroundColor: selectedDocumentId === doc._id ? "#eff6ff" : "#ffffff", cursor: "pointer" }}
                       >
                         <Eye size={11} /> View
                       </a>
@@ -370,13 +401,19 @@ function DocumentsPanel({
 
 function UploadPanel({
   reference,
+  stage,
   multiUpload,
   uploading,
+  currentAction,
+  onActionChange,
   onUpload,
 }: {
   reference: string;
+  stage: Exclude<FrontendStageKey, "INV">;
   multiUpload: boolean;
   uploading: boolean;
+  currentAction: "upload" | "view" | "change";
+  onActionChange: (action: "upload" | "view" | "change") => void;
   onUpload: (files: File[]) => Promise<void>;
 }) {
   const [files, setFiles] = useState<File[]>([]);
@@ -386,8 +423,10 @@ function UploadPanel({
   return (
     <div style={{ padding: "20px 24px", backgroundColor: "#fafeff", borderTop: "1px solid #e2e8f0" }}>
       <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a", marginBottom: "14px", display: "flex", alignItems: "center", gap: "7px" }}>
-        <FileUp size={15} color="#0070F2" />
-        Upload Document{multiUpload ? "s" : ""}
+        <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+          <FileUp size={15} color="#0070F2" />
+          Upload Document{multiUpload ? "s" : ""}
+        </div>
       </div>
       <div style={{ display: "flex", alignItems: "flex-end", gap: "14px", flexWrap: "wrap" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
@@ -398,7 +437,7 @@ function UploadPanel({
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "5px", flex: 1, minWidth: "280px" }}>
           <span style={{ fontSize: "11px", fontWeight: "600", color: "#64748b" }}>
-            {multiUpload ? "Files" : "File"} (PDF, PNG, JPG, JPEG, TIFF, BMP)
+            {multiUpload ? "Files" : "File"} ({FILE_LABEL_BY_STAGE[stage]})
           </span>
           <button
             type="button"
@@ -426,39 +465,85 @@ function UploadPanel({
             ref={inputRef}
             type="file"
             multiple={multiUpload}
-            accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp"
+            accept={FILE_ACCEPT_BY_STAGE[stage]}
             style={{ display: "none" }}
             onChange={(e) => setFiles(Array.from(e.target.files || []))}
           />
         </div>
-        <button
-          type="button"
-          disabled={!canUpload}
-          onClick={async () => {
-            if (!canUpload) return;
-            await onUpload(files);
-            setFiles([]);
-            if (inputRef.current) inputRef.current.value = "";
-          }}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "7px",
-            padding: "10px 22px",
-            height: "44px",
-            borderRadius: "10px",
-            border: "none",
-            backgroundColor: canUpload ? "#0070F2" : "#e2e8f0",
-            color: canUpload ? "#ffffff" : "#94a3b8",
-            fontSize: "13px",
-            fontWeight: "700",
-            cursor: canUpload ? "pointer" : "not-allowed",
-            flexShrink: 0,
-          }}
-        >
-          {uploading ? <LoaderCircle size={15} className="animate-spin" /> : <FileUp size={15} />}
-          Upload
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            disabled={!canUpload}
+            onClick={async () => {
+              if (!canUpload) return;
+              await onUpload(files);
+              setFiles([]);
+              if (inputRef.current) inputRef.current.value = "";
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "7px",
+              padding: "10px 22px",
+              height: "44px",
+              borderRadius: "10px",
+              border: "none",
+              backgroundColor: canUpload ? "#0070F2" : "#e2e8f0",
+              color: canUpload ? "#ffffff" : "#94a3b8",
+              fontSize: "13px",
+              fontWeight: "700",
+              cursor: canUpload ? "pointer" : "not-allowed",
+              flexShrink: 0,
+            }}
+          >
+            {uploading ? <LoaderCircle size={15} className="animate-spin" /> : <FileUp size={15} />}
+            Upload
+          </button>
+          <button
+            type="button"
+            onClick={() => onActionChange("view")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "7px",
+              padding: "10px 18px",
+              height: "44px",
+              borderRadius: "10px",
+              border: currentAction === "view" ? "1px solid #0070F2" : "1px solid #d9d9d9",
+              backgroundColor: currentAction === "view" ? "#eff6ff" : "#ffffff",
+              color: currentAction === "view" ? "#0070F2" : "#32363a",
+              fontSize: "13px",
+              fontWeight: "700",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Eye size={15} />
+            View
+          </button>
+          <button
+            type="button"
+            onClick={() => onActionChange("change")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "7px",
+              padding: "10px 18px",
+              height: "44px",
+              borderRadius: "10px",
+              border: currentAction === "change" ? "1px solid #0070F2" : "1px solid #d9d9d9",
+              backgroundColor: currentAction === "change" ? "#eff6ff" : "#ffffff",
+              color: currentAction === "change" ? "#0070F2" : "#32363a",
+              fontSize: "13px",
+              fontWeight: "700",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Edit size={15} />
+            Change
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -509,6 +594,7 @@ export function ProcurementDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(subTab === "upload" || subTab === "view" || subTab === "change" ? "Attachment" : "Items");
 
   const replaceInputRef = useRef<HTMLInputElement>(null);
@@ -534,8 +620,13 @@ export function ProcurementDetailPage() {
       const res = await listDocuments(stageKey, docRef);
       const list = "documents" in res ? res.documents : res.document ? [res.document] : [];
       setDocs(list as StageDocument[]);
+      setSelectedDocumentId((current) => {
+        if (current && list.some((doc: StageDocument) => doc._id === current)) return current;
+        return list[0]?._id ?? null;
+      });
     } catch {
       setDocs([]);
+      setSelectedDocumentId(null);
     } finally {
       setDocsLoading(false);
     }
@@ -546,6 +637,18 @@ export function ProcurementDetailPage() {
     void loadRecord();
     void loadDocs();
   }, [docRef, stageKey]); // eslint-disable-line
+
+  useEffect(() => {
+    if (subTab === "upload" || subTab === "view" || subTab === "change") {
+      setActiveTab("Attachment");
+    }
+  }, [subTab]);
+
+  useEffect(() => {
+    if (subTab === "view" && selectedDocumentId) {
+      window.open(getDocumentDownloadUrl(stageKey, selectedDocumentId, true), "_blank", "noopener,noreferrer");
+    }
+  }, [selectedDocumentId, stageKey, subTab]);
 
   const handleUpload = async (files: File[]) => {
     if (!files.length) return;
@@ -597,6 +700,10 @@ export function ProcurementDetailPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed.");
     }
+  };
+
+  const changeAction = (action: "upload" | "view" | "change") => {
+    navigate(`/documents/${frontendStage.toLowerCase()}/${encodeURIComponent(docRef)}?action=${action}`);
   };
 
   const goBack = () => navigate(`/documents?tab=${frontendStage}`);
@@ -774,6 +881,8 @@ export function ProcurementDetailPage() {
                   docs={docs}
                   docsLoading={docsLoading}
                   canModify={subTab === "change"}
+                  selectedDocumentId={selectedDocumentId}
+                  onSelectDocument={setSelectedDocumentId}
                   onReplace={handleReplace}
                   onDelete={handleDelete}
                 />
@@ -781,8 +890,11 @@ export function ProcurementDetailPage() {
               {subTab === "upload" && (
                 <UploadPanel
                   reference={docRef}
+                  stage={frontendStage}
                   multiUpload={multiUpload}
                   uploading={uploading}
+                  currentAction={subTab}
+                  onActionChange={changeAction}
                   onUpload={handleUpload}
                 />
               )}
@@ -792,7 +904,7 @@ export function ProcurementDetailPage() {
         </div>
       </div>
 
-      <input ref={replaceInputRef} type="file" style={{ display: "none" }} onChange={(e) => void onReplaceFileSelected(e)} />
+      <input ref={replaceInputRef} type="file" accept={FILE_ACCEPT_BY_STAGE[frontendStage]} style={{ display: "none" }} onChange={(e) => void onReplaceFileSelected(e)} />
     </div>
   );
 }

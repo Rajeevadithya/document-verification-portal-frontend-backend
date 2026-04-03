@@ -21,11 +21,11 @@ from flask import Blueprint, request, send_file
 from backend.app import mongo
 from datetime import datetime
 from backend.app.utils.helpers import (
-    serialize_doc, success_response, error_response, allowed_file
+    serialize_doc, success_response, error_response, allowed_file, allowed_extensions_text
 )
 from backend.app.services.document_service import (
     save_document, change_document, delete_document, get_active_documents,
-    get_document_by_id, get_document_audit_logs
+    get_document_by_id, get_document_audit_logs, review_document
 )
 
 pr_bp = Blueprint("purchase_requisition", __name__)
@@ -214,9 +214,9 @@ def upload_pr_document(pr_number):
     for f in files:
         if not f or f.filename == "":
             continue
-        if not allowed_file(f.filename):
+        if not allowed_file(f.filename, "PR"):
             errors.append({"filename": f.filename, "reason": "INVALID_TYPE",
-                           "error": "Accepted: pdf, png, jpg, jpeg, tiff, bmp"})
+                           "error": f"Accepted: {allowed_extensions_text('PR')}"})
             continue
 
         from backend.app.services.document_service import _compute_hash
@@ -272,8 +272,8 @@ def change_pr_document(pr_number, doc_id):
     if "file" not in request.files:
         return error_response("No replacement file provided. Use key 'file'.", 400)
     f = request.files["file"]
-    if f.filename == "" or not allowed_file(f.filename):
-        return error_response("Invalid or unsupported file", 400)
+    if f.filename == "" or not allowed_file(f.filename, "PR"):
+        return error_response(f"Invalid or unsupported file. Allowed: {allowed_extensions_text('PR')}", 400)
     try:
         updated_doc = change_document(doc_id, f, "PR", pr_number)
     except ValueError as e:
@@ -349,3 +349,26 @@ def document_audit_log(doc_id):
         {"document_id": doc_id, "audit_logs": logs, "count": len(logs)},
         "Document audit logs fetched",
     )
+
+
+@pr_bp.route("/<pr_number>/documents/<doc_id>/review", methods=["PUT"])
+def review_pr_uploaded_document(pr_number, doc_id):
+    pr = mongo.db.purchase_requisitions.find_one({"purchaseRequisitionNumber": pr_number})
+    if not pr:
+        return error_response(f"PR '{pr_number}' not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    decision = (body.get("decision") or "").upper()
+    comment = body.get("comment")
+    reviewed_by = body.get("reviewed_by")
+
+    doc = get_document_by_id(doc_id)
+    if not doc or doc.get("stage") != "PR" or doc.get("reference_number") != pr_number:
+        return error_response("Document not found", 404)
+
+    try:
+        reviewed = review_document(doc_id, decision, comment=comment, reviewed_by=reviewed_by)
+    except ValueError as e:
+        return error_response(str(e), 400)
+
+    return success_response(reviewed, f"PR document {decision.lower()} successfully")
