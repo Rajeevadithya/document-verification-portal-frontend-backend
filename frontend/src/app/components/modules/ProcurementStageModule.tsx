@@ -362,10 +362,54 @@ function DocumentsPanel({
   docsLoading: boolean; canModify: boolean;
   onReplace: (ref: string, docId: string) => void;
   onDelete: (docId: string) => Promise<void>;
-  onReview: (reference: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
-  onComment: (reference: string, doc: StageDocument) => Promise<void>;
+  onReview: (reference: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED", comment?: string) => Promise<void>;
+  onComment: (reference: string, doc: StageDocument, comment?: string) => Promise<void>;
 }) {
   const cols = ["File Name", "Reference", "Version", "Upload Date", "Uploaded By", "Decision", "Size", "Actions"];
+  const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
+  const [editor, setEditor] = useState<{ mode: "comment" | "approve" | "reject"; docId: string } | null>(null);
+  const [draftText, setDraftText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const activeDoc = docs.find((doc) => doc._id === selectedDocId) || docs[0] || null;
+
+  useEffect(() => {
+    setSelectedDocId((current) => {
+      if (current && docs.some((doc) => doc._id === current)) return current;
+      return docs[0]?._id ?? null;
+    });
+  }, [docs]);
+
+  const openEditor = (mode: "comment" | "approve" | "reject", doc: StageDocument) => {
+    setSelectedDocId(doc._id);
+    setEditor({ mode, docId: doc._id });
+    setDraftText(mode === "comment" ? doc.attachment_comment || "" : doc.review_comment || "");
+  };
+
+  const closeEditor = () => {
+    setEditor(null);
+    setDraftText("");
+  };
+
+  const handleSubmit = async () => {
+    if (!editor) return;
+    const doc = docs.find((item) => item._id === editor.docId);
+    if (!doc) return;
+    const cleanText = draftText.trim();
+    if (editor.mode === "reject" && stage === "GRN" && !cleanText) return;
+
+    setSubmitting(true);
+    try {
+      if (editor.mode === "comment") {
+        await onComment(reference, doc, cleanText || undefined);
+      } else {
+        await onReview(reference, doc, editor.mode === "approve" ? "ACCEPTED" : "REJECTED", cleanText || undefined);
+      }
+      closeEditor();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <div style={{ borderTop: "1px solid #dbeafe" }}>
       <div style={{ padding: "8px 14px", backgroundColor: "#f0f7ff", borderBottom: "1px solid #dbeafe", display: "flex", alignItems: "center", gap: "6px" }}>
@@ -391,42 +435,29 @@ function DocumentsPanel({
                 </tr>
               ) : docs.map((doc, i) => (
                 <tr key={doc._id} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafbfc" }}>
-                  <td style={{ ...SUB_TD, color: "#0070F2", minWidth: "240px" }}>
-                    <div>{doc.original_filename}</div>
-                    {doc.attachment_comment ? (
-                      <div style={{ marginTop: "6px", fontSize: "10px", color: "#64748b", whiteSpace: "normal" }}>
-                        Comment: {doc.attachment_comment}
-                      </div>
-                    ) : null}
-                  </td>
+                  <td style={{ ...SUB_TD, color: "#0070F2", minWidth: "240px" }}>{doc.original_filename}</td>
                   <td style={SUB_TD}>{reference}</td>
                   <td style={SUB_TD}>v{doc.version}</td>
                   <td style={SUB_TD}>{formatDate(doc.uploaded_at)}</td>
                   <td style={SUB_TD}>{doc.uploaded_by || "system"}</td>
-                  <td style={SUB_TD}>
-                    <div>{doc.review_status}</div>
-                    {doc.review_comment ? (
-                      <div style={{ marginTop: "4px", fontSize: "10px", color: "#64748b", whiteSpace: "normal" }}>
-                        Review note: {doc.review_comment}
-                      </div>
-                    ) : null}
-                  </td>
+                  <td style={SUB_TD}>{doc.review_status}</td>
                   <td style={SUB_TD}>{formatFileSize(doc.file_size)}</td>
                   <td style={{ ...SUB_TD, borderRight: "none" }}>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                       <a href={getDocumentDownloadUrl(stage, doc._id, true)} target="_blank" rel="noreferrer"
+                        onClick={() => setSelectedDocId(doc._id)}
                         style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #0070F2", color: "#0070F2", borderRadius: "6px", fontSize: "10px", fontWeight: "600", textDecoration: "none", backgroundColor: "#ffffff" }}>
                         <Eye size={10} /> View
                       </a>
-                      <button onClick={() => void onReview(reference, doc, "ACCEPTED")}
+                      <button onClick={() => openEditor("approve", doc)}
                         style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #107E3E", color: "#107E3E", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
                         Approve
                       </button>
-                      <button onClick={() => void onReview(reference, doc, "REJECTED")}
+                      <button onClick={() => openEditor("reject", doc)}
                         style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #BB0000", color: "#BB0000", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
                         Reject
                       </button>
-                      <button onClick={() => void onComment(reference, doc)}
+                      <button onClick={() => openEditor("comment", doc)}
                         style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #d9d9d9", color: "#32363a", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
                         {doc.attachment_comment ? "Edit Comment" : "Add Comment"}
                       </button>
@@ -454,6 +485,75 @@ function DocumentsPanel({
           </table>
         </div>
       )}
+
+      {activeDoc && (activeDoc.attachment_comment || activeDoc.review_comment || editor) ? (
+        <div style={{ borderTop: "1px solid #dbeafe", backgroundColor: "#fbfdff", padding: "14px 16px", display: "flex", flexDirection: "column", gap: "10px" }}>
+          <div>
+            <div style={{ fontSize: "11px", fontWeight: "700", color: "#0f172a" }}>Document Notes</div>
+            <div style={{ fontSize: "10px", color: "#64748b", marginTop: "2px" }}>{activeDoc.original_filename}</div>
+          </div>
+
+          {activeDoc.attachment_comment ? (
+            <div style={{ padding: "10px 12px", border: "1px solid #dbeafe", borderRadius: "10px", backgroundColor: "#f8fbff" }}>
+              <div style={{ fontSize: "10px", fontWeight: "700", color: "#1e40af", marginBottom: "4px" }}>Attachment Comment</div>
+              <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap" }}>{activeDoc.attachment_comment}</div>
+            </div>
+          ) : null}
+
+          {activeDoc.review_comment ? (
+            <div style={{ padding: "10px 12px", border: "1px solid #fde68a", borderRadius: "10px", backgroundColor: "#fffdf5" }}>
+              <div style={{ fontSize: "10px", fontWeight: "700", color: "#b45309", marginBottom: "4px" }}>Review Note</div>
+              <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap" }}>{activeDoc.review_comment}</div>
+            </div>
+          ) : null}
+
+          {editor && activeDoc._id === editor.docId ? (
+            <div style={{ padding: "12px", border: "1px solid #cbd5e1", borderRadius: "12px", backgroundColor: "#ffffff", display: "flex", flexDirection: "column", gap: "8px" }}>
+              <div style={{ fontSize: "11px", fontWeight: "700", color: "#0f172a" }}>
+                {editor.mode === "comment"
+                  ? "Add Attachment Comment"
+                  : editor.mode === "approve"
+                    ? "Approve Document"
+                    : "Reject Document"}
+              </div>
+              <textarea
+                value={draftText}
+                onChange={(e) => setDraftText(e.target.value)}
+                rows={3}
+                placeholder={
+                  editor.mode === "comment"
+                    ? "Enter attachment comment"
+                    : editor.mode === "approve"
+                      ? "Enter approval note"
+                      : "Enter rejection reason"
+                }
+                style={{ width: "100%", padding: "9px 11px", border: "1px solid #cbd5e1", borderRadius: "10px", fontSize: "11px", color: "#334155", resize: "vertical", outline: "none" }}
+              />
+              {editor.mode === "reject" && stage === "GRN" ? (
+                <div style={{ fontSize: "10px", color: "#BB0000" }}>A rejection reason is required for GRN documents.</div>
+              ) : null}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={closeEditor}
+                  disabled={submitting}
+                  style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSubmit()}
+                  disabled={submitting || (editor.mode === "reject" && stage === "GRN" && !draftText.trim())}
+                  style={{ padding: "7px 14px", borderRadius: "8px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting || (editor.mode === "reject" && stage === "GRN" && !draftText.trim()) ? 0.6 : 1 }}
+                >
+                  {submitting ? "Saving..." : editor.mode === "comment" ? "Save Comment" : editor.mode === "approve" ? "Approve" : "Reject"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -810,25 +910,16 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
     }
   };
 
-  const handleReview = async (ref: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => {
+  const handleReview = async (ref: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED", comment?: string) => {
     setError(null);
-    let comment = "";
-    if (decision === "REJECTED") {
-      const promptText =
-        stage === "GRN"
-          ? "Enter the rejection reason for this GRN document."
-          : `Enter an optional comment for rejecting this ${config.frontendStage} document.`;
-      const entered = window.prompt(promptText, doc.review_comment || "");
-      if (entered === null) return;
-      comment = entered.trim();
-      if (stage === "GRN" && !comment) {
-        setError("GRN rejection requires a reason.");
-        return;
-      }
+    const cleanComment = (comment || "").trim();
+    if (decision === "REJECTED" && stage === "GRN" && !cleanComment) {
+      setError("GRN rejection requires a reason.");
+      return;
     }
 
     try {
-      const updated = await reviewDocument(stage, ref, doc._id, decision, comment || undefined);
+      const updated = await reviewDocument(stage, ref, doc._id, decision, cleanComment || undefined);
       setDocumentsByReference((prev) => ({
         ...prev,
         [ref]: (prev[ref] || []).map((item) => (item._id === updated._id ? updated : item)),
@@ -839,21 +930,16 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
     }
   };
 
-  const handleComment = async (ref: string, doc: StageDocument) => {
+  const handleComment = async (ref: string, doc: StageDocument, comment?: string) => {
     setError(null);
-    const entered = window.prompt(
-      `Add a comment for this ${config.frontendStage} attachment. Leave it blank to clear the existing comment.`,
-      doc.attachment_comment || ""
-    );
-    if (entered === null) return;
-
     try {
-      const updated = await commentDocument(stage, ref, doc._id, entered.trim() || undefined);
+      const cleanComment = (comment || "").trim();
+      const updated = await commentDocument(stage, ref, doc._id, cleanComment || undefined);
       setDocumentsByReference((prev) => ({
         ...prev,
         [ref]: (prev[ref] || []).map((item) => (item._id === updated._id ? updated : item)),
       }));
-      setInfoMessage(`Comment ${entered.trim() ? "saved" : "cleared"} successfully.`);
+      setInfoMessage(`Comment ${cleanComment ? "saved" : "cleared"} successfully.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to save document comment.");
     }

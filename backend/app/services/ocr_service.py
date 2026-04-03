@@ -35,6 +35,34 @@ STAGE_KEYWORDS = {
     ]
 }
 
+STAGE_STRONG_PATTERNS = {
+    "PR": [
+        r"\bpurchase\s+requisition\b",
+        r"\bpr\s*number\b",
+        r"\bpr\s*no\b",
+    ],
+    "PO": [
+        r"\bpurchase\s+order\b",
+        r"\bp\.?\s*o\.?\s*no\b",
+        r"\bpo\s*number\b",
+        r"\border\s+number\b",
+    ],
+    "GRN": [
+        r"\bgoods\s+receipt\s+note\b",
+        r"\bgoods\s+received\s+note\b",
+        r"\bgoods\s+receipt\b",
+        r"\bmaterial\s+document\b",
+        r"\bgrn\s*number\b",
+        r"\bgrn\s*no\b",
+    ],
+    "INVOICE": [
+        r"\btax\s+invoice\b",
+        r"\binvoice\s+number\b",
+        r"\bamount\s+due\b",
+        r"\binvoice\s+date\b",
+    ],
+}
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _extract_text_from_pdf(file_path: str) -> str:
@@ -71,12 +99,25 @@ def extract_text(file_path: str) -> str:
         text = _extract_text_from_image(file_path)
     return text
 
+def _normalize_ocr_text(text: str) -> str:
+    lowered = text.lower()
+    lowered = lowered.replace("&", " and ")
+    lowered = re.sub(r"[^a-z0-9]+", " ", lowered)
+    return re.sub(r"\s+", " ", lowered).strip()
+
 def _detect_stage(text: str) -> str | None:
-    """Return detected stage name based on keyword density."""
+    """Return detected stage name based on weighted keyword density."""
     lower = text.lower()
+    normalized = _normalize_ocr_text(text)
     scores = {}
     for stage, keywords in STAGE_KEYWORDS.items():
-        scores[stage] = sum(1 for kw in keywords if kw in lower)
+        strong_score = sum(4 for pattern in STAGE_STRONG_PATTERNS.get(stage, []) if re.search(pattern, lower))
+        keyword_score = 0
+        for kw in keywords:
+            normalized_kw = _normalize_ocr_text(kw)
+            if normalized_kw and normalized_kw in normalized:
+                keyword_score += 1
+        scores[stage] = strong_score + keyword_score
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else None
 

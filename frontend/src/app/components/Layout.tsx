@@ -3,7 +3,7 @@ import { Outlet, useLocation, useNavigate } from "react-router";
 import { Bell, BarChart2, ChevronDown, FileUp, LayoutDashboard, LoaderCircle, LogOut, Settings, User, X } from "lucide-react";
 import logo from "../../assets/logo.png";
 import { getNotifications, getUnreadNotificationCount, markAllNotificationsRead, markNotificationRead } from "../lib/api";
-import { formatDateTime, statusTone } from "../lib/format";
+import { formatDateTime } from "../lib/format";
 import type { NotificationItem } from "../lib/types";
 import { ProcurementChatbot } from "./ProcurementChatbot";
 
@@ -33,6 +33,20 @@ function getNotificationRoute(notification: NotificationItem) {
     return getProcurementDetailRoute(tab, notification.reference_number, defaultAction);
   }
   return `/documents?tab=INV&doc=${encodeURIComponent(notification.reference_number)}`;
+}
+
+function getNotificationDotColor(notification: NotificationItem) {
+  const type = notification.type.toUpperCase();
+
+  if (type.includes("ACCEPT") || type.includes("APPROV")) {
+    return "#107E3E";
+  }
+
+  if (type.includes("REJECT")) {
+    return "#BB0000";
+  }
+
+  return "#E9730C";
 }
 
 export function Layout() {
@@ -117,10 +131,10 @@ export function Layout() {
                 ) : notifications.length === 0 ? (
                   <div className="px-3 py-4" style={{ fontSize: "12px", color: "#8a8b8c" }}>No notifications available.</div>
                 ) : notifications.map((notification) => {
-                  const tone = statusTone(notification.type.includes("FAILED") ? "INVALID" : notification.is_read ? "READ" : "PENDING");
+                  const dotColor = getNotificationDotColor(notification);
                   return (
                     <button key={notification._id} onClick={() => void openNotification(notification)} className="flex items-start gap-2 px-3 py-2 border-b hover:bg-blue-50 cursor-pointer text-left w-full" style={{ borderColor: "#eeeeee" }}>
-                      <div className="rounded-full mt-1 flex-shrink-0" style={{ width: "8px", height: "8px", backgroundColor: notification.is_read ? "#C7C7C7" : tone.color }} />
+                      <div className="rounded-full mt-1 flex-shrink-0" style={{ width: "8px", height: "8px", backgroundColor: dotColor }} />
                       <div className="flex-1 min-w-0">
                         <div style={{ fontSize: "12px", color: "#32363a", fontWeight: notification.is_read ? "400" : "600" }}>{notification.message}</div>
                         <div style={{ fontSize: "11px", color: "#8a8b8c", marginTop: "2px" }}>{notification.reference_number} • {formatDateTime(notification.created_at)}</div>
