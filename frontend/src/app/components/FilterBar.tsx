@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, ChevronDown, HelpCircle, Search, X } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronUp, HelpCircle, Search, X } from "lucide-react";
 import { ValueHelpDialog } from "./ValueHelpDialog";
 import type { FrontendStageKey, ValueHelpItem } from "../lib/types";
 
@@ -143,7 +143,7 @@ function FieldInput({
     color: "#334155",
     backgroundColor: "#ffffff",
     height: "40px",
-    width: field.width ?? "220px",
+    width: "100%",
     borderRadius: "8px",
   } as const;
 
@@ -235,6 +235,7 @@ function FieldInput({
 export function FilterBar({ docType, onSearch, valueHelpItems, valueHelpSources = {}, values, fieldOptions = {} }: FilterBarProps) {
   const [draft, setDraft] = useState<FilterValues>(createEmptyFilterValues(values));
   const [activeVhField, setActiveVhField] = useState<keyof FilterValues | null>(null);
+  const [filtersExpanded, setFiltersExpanded] = useState(true);
 
   useEffect(() => {
     setDraft(createEmptyFilterValues(values));
@@ -246,6 +247,7 @@ export function FilterBar({ docType, onSearch, valueHelpItems, valueHelpSources 
   const isDirty = hasAnyFilter(draft);
   const activeVhItems = activeVhField ? valueHelpSources[activeVhField] ?? valueHelpItems : valueHelpItems;
   const activeVhTitle = activeVhField ? fields.find((field) => field.key === activeVhField)?.label ?? title : title;
+  const activeFilterCount = Object.values(draft).filter((value) => value !== "").length;
 
   const handleClearFilters = () => {
     const cleared = createEmptyFilterValues();
@@ -259,62 +261,106 @@ export function FilterBar({ docType, onSearch, valueHelpItems, valueHelpSources 
         className="px-6 py-5 border-b"
         style={{ backgroundColor: "#ffffff", borderColor: "#e2e8f0", boxShadow: "0 1px 0 rgba(15, 23, 42, 0.04)" }}
       >
-        <div className="flex items-center justify-between mb-5">
-          <div style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Standard</div>
-          <div style={{ fontSize: "12px", color: "#2563eb", fontWeight: "600" }}>{title}</div>
-        </div>
-
-        <div className="flex items-end gap-x-6 gap-y-4 flex-wrap">
-          {fields.map((field) => (
-            <div key={field.key} className="flex flex-col gap-1" style={{ minWidth: field.width }}>
-              <label style={{ fontSize: "11px", color: "#64748b", fontWeight: "600" }}>{field.label}</label>
-              <FieldInput
-                field={field}
-                value={draft[field.key]}
-                onChange={(nextValue) => setDraft((current) => ({ ...current, [field.key]: nextValue }))}
-                options={
-                  field.key === "docNumber" || field.key === "purchaseOrder" || field.key === "materialDocument" || field.key === "prNumber" || field.key === "poNumber" || field.key === "grnNumber"
-                    ? availableDocNumbers
-                    : fieldOptions[field.key] ?? []
-                }
-                onValueHelp={(key) => setActiveVhField(key)}
-              />
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <div style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Standard</div>
+            <div style={{ fontSize: "12px", color: "#2563eb", fontWeight: "600", marginTop: "3px" }}>{title}</div>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <div style={{ fontSize: "12px", color: "#64748b", fontWeight: "600" }}>
+              {activeFilterCount > 0 ? `${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}` : "No filters applied"}
             </div>
-          ))}
-
-          <div className="flex items-center gap-4 ml-auto">
             <button
               type="button"
-              onClick={() => onSearch(draft)}
-              className="px-4 py-2"
+              onClick={() => setFiltersExpanded((current) => !current)}
+              className="flex items-center gap-2"
               style={{
                 fontSize: "12px",
-                backgroundColor: "#1d4ed8",
-                color: "#ffffff",
-                borderRadius: "12px",
-                minWidth: "56px",
-                height: "40px",
                 fontWeight: "700",
+                color: "#334155",
+                backgroundColor: "#f8fafc",
+                border: "1px solid #dbe3ee",
+                borderRadius: "10px",
+                padding: "8px 12px",
               }}
             >
-              Go
+              {filtersExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+              {filtersExpanded ? "Hide Filters" : "Show Filters"}
             </button>
-
-            {isDirty ? (
-              <button
-                type="button"
-                onClick={handleClearFilters}
-                className="flex items-center gap-1 text-left"
-                style={{ fontSize: "12px", color: "#BB0000", fontWeight: "600" }}
-              >
-                <X size={13} />
-                Clear Filters
-              </button>
-            ) : (
-              <span style={{ fontSize: "12px", color: "#94a3b8", fontWeight: "500" }}>Clear Filters</span>
-            )}
           </div>
         </div>
+
+        {filtersExpanded ? (
+          <div className="flex flex-col gap-5" style={{ marginTop: "20px" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: "16px 24px",
+                alignItems: "end",
+              }}
+            >
+              {fields.map((field) => (
+                <div
+                  key={field.key}
+                  className="flex flex-col gap-1"
+                  style={{ minWidth: `min(100%, ${field.width ?? "220px"})` }}
+                >
+                  <label style={{ fontSize: "11px", color: "#64748b", fontWeight: "600" }}>{field.label}</label>
+                  <FieldInput
+                    field={field}
+                    value={draft[field.key]}
+                    onChange={(nextValue) => setDraft((current) => ({ ...current, [field.key]: nextValue }))}
+                    options={
+                      field.key === "docNumber" || field.key === "purchaseOrder" || field.key === "materialDocument" || field.key === "prNumber" || field.key === "poNumber" || field.key === "grnNumber"
+                        ? availableDocNumbers
+                        : fieldOptions[field.key] ?? []
+                    }
+                    onValueHelp={(key) => setActiveVhField(key)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div style={{ fontSize: "12px", color: "#94a3b8", fontWeight: "500" }}>
+                Collapse filters anytime to give the table more room.
+              </div>
+              <div className="flex items-center gap-4 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => onSearch(draft)}
+                  className="px-4 py-2"
+                  style={{
+                    fontSize: "12px",
+                    backgroundColor: "#1d4ed8",
+                    color: "#ffffff",
+                    borderRadius: "12px",
+                    minWidth: "56px",
+                    height: "40px",
+                    fontWeight: "700",
+                  }}
+                >
+                  Go
+                </button>
+
+                {isDirty ? (
+                  <button
+                    type="button"
+                    onClick={handleClearFilters}
+                    className="flex items-center gap-1 text-left"
+                    style={{ fontSize: "12px", color: "#BB0000", fontWeight: "600" }}
+                  >
+                    <X size={13} />
+                    Clear Filters
+                  </button>
+                ) : (
+                  <span style={{ fontSize: "12px", color: "#94a3b8", fontWeight: "500" }}>Clear Filters</span>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {activeVhField && (
