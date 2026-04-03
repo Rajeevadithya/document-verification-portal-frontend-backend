@@ -12,12 +12,14 @@ import {
   Upload,
 } from "lucide-react";
 import {
+  commentDocument,
   deleteDocument,
   getDocumentDownloadUrl,
   getStageFromFrontend,
   getStageRecord,
   listDocuments,
   replaceDocument,
+  reviewDocument,
   uploadDocuments,
 } from "../../lib/api";
 import { formatCurrency, formatDate } from "../../lib/format";
@@ -35,10 +37,10 @@ import type {
 type ProcurementRecord = PRRecord | PORecord | GRNRecord;
 
 function isPRRecord(r: ProcurementRecord): r is PRRecord {
-  return "pr_number" in r && "document_type" in r;
+  return "pr_number" in r && "document_type" in r && !("po_number" in r) && !("grn_number" in r);
 }
 function isPORecord(r: ProcurementRecord): r is PORecord {
-  return "po_number" in r && "vendor" in r && "company_code" in r;
+  return "po_number" in r && "vendor" in r && "company_code" in r && !("grn_number" in r);
 }
 function isGRNRecord(r: ProcurementRecord): r is GRNRecord {
   return "grn_number" in r && "document_date" in r && "posting_date" in r;
@@ -206,7 +208,7 @@ function PRItemsTable({ record }: { record: PRRecord }) {
         <tbody>
           {record.items.map((item, i) => (
             <tr key={item.item_number} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafcff" }}>
-              <td style={TD}>{item.item_number}</td>
+              <td style={TD}>{item.item_number || "—"}</td>
               <td style={{ ...TD, color: "#0070F2", fontWeight: "600" }}>{item.material || "—"}</td>
               <td style={TD}>{item.material_description || "—"}</td>
               <td style={TD}>{item.plant}</td>
@@ -233,7 +235,7 @@ function POItemsTable({ record }: { record: PORecord }) {
         <tbody>
           {record.items.map((item, i) => (
             <tr key={item.item_number} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafcff" }}>
-              <td style={TD}>{item.item_number}</td>
+              <td style={TD}>{item.item_number || "—"}</td>
               <td style={{ ...TD, color: "#107E3E", fontWeight: "600" }}>{item.material}</td>
               <td style={TD}>{item.material_description || "—"}</td>
               <td style={{ ...TD, textAlign: "right" }}>{item.quantity.toLocaleString()}</td>
@@ -259,7 +261,7 @@ function GRNItemsTable({ record }: { record: GRNRecord }) {
         <tbody>
           {record.items.map((item, i) => (
             <tr key={item.item_number} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafcff" }}>
-              <td style={TD}>{item.item_number}</td>
+              <td style={TD}>{item.item_number || "—"}</td>
               <td style={{ ...TD, color: "#E9730C", fontWeight: "600" }}>{item.material}</td>
               <td style={TD}>{item.material_description || "—"}</td>
               <td style={{ ...TD, textAlign: "right" }}>{item.quantity.toLocaleString()}</td>
@@ -294,6 +296,8 @@ function DocumentsPanel({
   onSelectDocument,
   onReplace,
   onDelete,
+  onReview,
+  onComment,
 }: {
   reference: string;
   stageKey: StageKey;
@@ -304,6 +308,8 @@ function DocumentsPanel({
   onSelectDocument: (docId: string) => void;
   onReplace: (ref: string, docId: string) => void;
   onDelete: (docId: string) => Promise<void>;
+  onReview: (doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
+  onComment: (doc: StageDocument) => Promise<void>;
 }) {
   return (
     <div style={{ borderTop: "1px solid #e0edff" }}>
@@ -332,7 +338,7 @@ function DocumentsPanel({
           <table style={{ borderCollapse: "collapse", width: "100%", minWidth: "900px" }}>
             <thead>
               <tr>
-                {["File Name", "Reference", "Version", "Upload Date", "Decision", "Comment", "Actions"].map((c) => (
+                {["File Name", "Reference", "Version", "Upload Date", "Decision", "Actions"].map((c) => (
                   <th key={c} style={TH}>{c}</th>
                 ))}
               </tr>
@@ -340,18 +346,31 @@ function DocumentsPanel({
             <tbody>
               {docs.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "24px", textAlign: "center", fontSize: "13px", color: "#94a3b8" }}>
+                  <td colSpan={6} style={{ padding: "24px", textAlign: "center", fontSize: "13px", color: "#94a3b8" }}>
                     No documents uploaded for <strong>{reference}</strong>.
                   </td>
                 </tr>
               ) : docs.map((doc, i) => (
                 <tr key={doc._id} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafcff" }}>
-                  <td style={{ ...TD, color: "#0070F2", fontWeight: "600", minWidth: "200px" }}>{doc.original_filename}</td>
+                  <td style={{ ...TD, color: "#0070F2", fontWeight: "600", minWidth: "240px" }}>
+                    <div>{doc.original_filename}</div>
+                    {doc.attachment_comment ? (
+                      <div style={{ marginTop: "6px", fontSize: "11px", fontWeight: "500", color: "#64748b", whiteSpace: "normal" }}>
+                        Comment: {doc.attachment_comment}
+                      </div>
+                    ) : null}
+                  </td>
                   <td style={TD}>{reference}</td>
                   <td style={TD}>v{doc.version}</td>
                   <td style={TD}>{formatDate(doc.uploaded_at)}</td>
-                  <td style={TD}><ReviewBadge status={doc.review_status} /></td>
-                  <td style={{ ...TD, maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.review_comment || "—"}</td>
+                  <td style={TD}>
+                    <ReviewBadge status={doc.review_status} />
+                    {doc.review_comment ? (
+                      <div style={{ marginTop: "6px", fontSize: "11px", fontWeight: "500", color: "#64748b", whiteSpace: "normal" }}>
+                        Review note: {doc.review_comment}
+                      </div>
+                    ) : null}
+                  </td>
                   <td style={{ ...TD, borderRight: "none" }}>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                       <a
@@ -363,6 +382,24 @@ function DocumentsPanel({
                       >
                         <Eye size={11} /> View
                       </a>
+                      <button
+                        onClick={() => void onReview(doc, "ACCEPTED")}
+                        style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #107E3E", color: "#107E3E", borderRadius: "7px", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => void onReview(doc, "REJECTED")}
+                        style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #BB0000", color: "#BB0000", borderRadius: "7px", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
+                      >
+                        Reject
+                      </button>
+                      <button
+                        onClick={() => void onComment(doc)}
+                        style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #d9d9d9", color: "#32363a", borderRadius: "7px", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
+                      >
+                        {doc.attachment_comment ? "Edit Comment" : "Add Comment"}
+                      </button>
                       <a
                         href={getDocumentDownloadUrl(stageKey, doc._id)}
                         style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #d9d9d9", color: "#32363a", borderRadius: "7px", fontSize: "11px", fontWeight: "600", textDecoration: "none", backgroundColor: "#ffffff" }}
@@ -823,7 +860,7 @@ export function ProcurementDetailPage() {
                 <MetaChip label="Document Type" value={record.document_type || "—"} />
               </>}
               {isPORecord(record) && <>
-                <MetaChip label="Supplier" value={record.vendor || "—"} />
+                <MetaChip label="Purchase Organization" value={record.purchase_organization || "—"} />
                 <MetaChip label="Company Code" value={record.company_code || "—"} />
                 <MetaChip label="Purchase Group" value={record.purchase_group || "—"} />
               </>}
@@ -885,6 +922,49 @@ export function ProcurementDetailPage() {
                   onSelectDocument={setSelectedDocumentId}
                   onReplace={handleReplace}
                   onDelete={handleDelete}
+                  onReview={async (doc, decision) => {
+                    setError(null);
+                    let comment = "";
+                    if (decision === "REJECTED") {
+                      const promptText =
+                        stageKey === "GRN"
+                          ? "Enter the rejection reason for this GRN document."
+                          : `Enter an optional comment for rejecting this ${stageKey} document.`;
+                      const entered = window.prompt(promptText, doc.review_comment || "");
+                      if (entered === null) return;
+                      comment = entered.trim();
+                      if (stageKey === "GRN" && !comment) {
+                        setError("GRN rejection requires a reason.");
+                        return;
+                      }
+                    }
+
+                    try {
+                      const updated = await reviewDocument(stageKey, docRef, doc._id, decision, comment || undefined);
+                      setDocs((current) => current.map((item) => (item._id === updated._id ? updated : item)));
+                      setSelectedDocumentId(updated._id);
+                      setInfoMessage(`${stageKey} document ${decision === "ACCEPTED" ? "approved" : "rejected"} successfully.`);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Unable to update document review status.");
+                    }
+                  }}
+                  onComment={async (doc) => {
+                    setError(null);
+                    const entered = window.prompt(
+                      `Add a comment for this ${stageKey} attachment. Leave it blank to clear the existing comment.`,
+                      doc.attachment_comment || ""
+                    );
+                    if (entered === null) return;
+
+                    try {
+                      const updated = await commentDocument(stageKey, docRef, doc._id, entered.trim() || undefined);
+                      setDocs((current) => current.map((item) => (item._id === updated._id ? updated : item)));
+                      setSelectedDocumentId(updated._id);
+                      setInfoMessage(`Comment ${entered.trim() ? "saved" : "cleared"} successfully.`);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Unable to save document comment.");
+                    }
+                  }}
                 />
               )}
               {subTab === "upload" && (

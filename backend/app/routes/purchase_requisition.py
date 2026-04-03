@@ -25,7 +25,7 @@ from backend.app.utils.helpers import (
 )
 from backend.app.services.document_service import (
     save_document, change_document, delete_document, get_active_documents,
-    get_document_by_id, get_document_audit_logs, review_document
+    get_document_by_id, get_document_audit_logs, review_document, update_document_comment
 )
 
 pr_bp = Blueprint("purchase_requisition", __name__)
@@ -50,6 +50,10 @@ PR_ITEM_ORDER = [
 ]
 
 
+def _as_text(value):
+    return "" if value is None else str(value)
+
+
 def _calc_total_value(items):
     try:
         return round(sum(float(i.get("amount", 0) or 0) for i in items), 2)
@@ -62,7 +66,7 @@ def _format_pr_response(pr_doc):
 
     def reorder_item(item):
         ordered = OrderedDict()
-        ordered["itemNumber"]          = item.get("itemNumber", "")
+        ordered["itemNumber"]          = _as_text(item.get("itemNumber", item.get("item_number", "")))
         ordered["material"]            = item.get("material", "")
         ordered["materialDescription"] = item.get("materialDescription", "")
         ordered["plant"]               = item.get("plant", "")
@@ -372,3 +376,21 @@ def review_pr_uploaded_document(pr_number, doc_id):
         return error_response(str(e), 400)
 
     return success_response(reviewed, f"PR document {decision.lower()} successfully")
+
+
+@pr_bp.route("/<pr_number>/documents/<doc_id>/comment", methods=["PUT"])
+def comment_pr_uploaded_document(pr_number, doc_id):
+    pr = mongo.db.purchase_requisitions.find_one({"purchaseRequisitionNumber": pr_number})
+    if not pr:
+        return error_response(f"PR '{pr_number}' not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    comment = body.get("comment")
+    commented_by = body.get("commented_by")
+
+    doc = get_document_by_id(doc_id)
+    if not doc or doc.get("stage") != "PR" or doc.get("reference_number") != pr_number:
+        return error_response("Document not found", 404)
+
+    updated = update_document_comment(doc_id, comment=comment, commented_by=commented_by)
+    return success_response(updated, "PR document comment saved successfully")

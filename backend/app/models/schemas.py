@@ -116,6 +116,9 @@ Collection: documents
     "review_comment": str | None,
     "reviewed_by": str | None,
     "reviewed_at": datetime | None,
+    "attachment_comment": str | None,
+    "commented_by": str | None,
+    "commented_at": datetime | None,
     "version": int,                 # increments on change
     "is_active": bool,
     "uploaded_at": datetime,

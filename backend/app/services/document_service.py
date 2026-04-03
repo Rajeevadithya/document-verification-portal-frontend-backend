@@ -54,6 +54,11 @@ def _build_ocr_failure_message(stage: str, reference_number: str, rejection_deta
     reasons = rejection_detail.get("failure_reasons", []) if rejection_detail else []
     simple_reasons: list[str] = []
 
+    if stage_upper == "PO" and ocr_result.get("grn_reference_found"):
+        simple_reasons.append(
+            "PO upload rejected because the file contains GRN details. A Purchase Order upload must not contain any GRN number or Goods Receipt Note content."
+        )
+
     for reason in reasons:
         check = (reason.get("check") or "").lower()
         found = reason.get("found") or ""
@@ -74,6 +79,10 @@ def _build_ocr_failure_message(stage: str, reference_number: str, rejection_deta
                 simple_reasons.append(f"Uploaded file looks like a {found} document, not a {stage_upper} document.")
             else:
                 simple_reasons.append("OCR could not clearly identify the document type.")
+        elif "grn reference detection" in check:
+            simple_reasons.append(
+                "PO upload rejected because a GRN number or Goods Receipt Note reference was detected in the document."
+            )
 
     if not simple_reasons and ocr_result.get("issues"):
         for issue in ocr_result["issues"][:2]:
@@ -92,7 +101,8 @@ def _should_block_for_ocr(stage: str, ocr_result: dict) -> bool:
     stage_upper = stage.upper()
     ocr_status = ocr_result.get("ocr_status")
     if stage_upper == "PO":
-        return (ocr_result.get("document_type_detected") or "").upper() == "GRN"
+        detected_stage = (ocr_result.get("document_type_detected") or "").upper()
+        return ocr_result.get("grn_reference_found") or (detected_stage not in {"", "PO"} and detected_stage is not None)
     if stage_upper == "GRN":
         return ocr_status != "VALID"
     if stage_upper == "PR":
@@ -197,6 +207,9 @@ def save_document(file_obj, stage: str, reference_number: str,
         "review_comment": None,
         "reviewed_by": None,
         "reviewed_at": None,
+        "attachment_comment": None,
+        "commented_by": None,
+        "commented_at": None,
         "uploaded_by": uploader,
         "uploaded_at": now,
         "updated_at": now
@@ -224,7 +237,8 @@ def save_document(file_obj, stage: str, reference_number: str,
             "ocr_confidence": ocr_result.get("confidence"),
             "ocr_issues": ocr_result.get("issues", []),
             "version": 1,
-            "review_status": "PENDING"
+            "review_status": "PENDING",
+            "attachment_comment": None,
         }
     )
 
@@ -323,6 +337,9 @@ def change_document(document_id: str, file_obj, stage: str,
         "review_comment": None,
         "reviewed_by": None,
         "reviewed_at": None,
+        "attachment_comment": None,
+        "commented_by": None,
+        "commented_at": None,
         "uploaded_by": uploader,
         "uploaded_at": now,
         "updated_at": now
@@ -351,7 +368,8 @@ def change_document(document_id: str, file_obj, stage: str,
             "ocr_issues": ocr_result.get("issues", []),
             "version": new_version,
             "replaced_document_id": document_id,
-            "review_status": "PENDING"
+            "review_status": "PENDING",
+            "attachment_comment": None,
         }
     )
 
@@ -432,6 +450,47 @@ def review_document(document_id: str, decision: str, comment: str | None = None,
         notification_message,
         "View Document",
         _get_stage_route(stage, reference_number, "view"),
+    )
+
+    return _serialize_one(updated)
+
+
+def update_document_comment(document_id: str, comment: str | None = None,
+                            commented_by: str | None = None) -> dict | None:
+    existing = mongo.db.documents.find_one({"_id": ObjectId(document_id), "is_active": True})
+    if not existing:
+        return None
+
+    commenter = commented_by or _resolve_uploader()
+    commented_at = datetime.utcnow()
+    clean_comment = (comment or "").strip() or None
+
+    mongo.db.documents.update_one(
+        {"_id": ObjectId(document_id)},
+        {"$set": {
+            "attachment_comment": clean_comment,
+            "commented_by": commenter if clean_comment else None,
+            "commented_at": commented_at if clean_comment else None,
+            "updated_at": commented_at,
+        }}
+    )
+
+    updated = mongo.db.documents.find_one({"_id": ObjectId(document_id)})
+    stage = (existing.get("stage") or "").upper()
+    reference_number = existing.get("reference_number")
+
+    _write_audit_log(
+        action="DOCUMENT_COMMENT_UPDATED" if clean_comment else "DOCUMENT_COMMENT_CLEARED",
+        document_id=document_id,
+        stage=stage,
+        reference_number=reference_number,
+        performed_by=commenter,
+        details={
+            "attachment_comment": clean_comment,
+            "commented_at": commented_at.isoformat(),
+            "original_filename": existing.get("original_filename"),
+            "version": existing.get("version", 1),
+        }
     )
 
     return _serialize_one(updated)
@@ -608,9 +667,17 @@ def _serialize_one(doc) -> dict | None:
         doc["reviewed_by"] = None
     if "reviewed_at" not in doc:
         doc["reviewed_at"] = None
+    if "attachment_comment" not in doc:
+        doc["attachment_comment"] = None
+    if "commented_by" not in doc:
+        doc["commented_by"] = None
+    if "commented_at" not in doc:
+        doc["commented_at"] = None
     for key in ("uploaded_at", "updated_at", "reviewed_at", "deleted_at"):
         if key in doc and isinstance(doc[key], datetime):
             doc[key] = doc[key].isoformat()
+    if "commented_at" in doc and isinstance(doc["commented_at"], datetime):
+        doc["commented_at"] = doc["commented_at"].isoformat()
     return doc
 
 

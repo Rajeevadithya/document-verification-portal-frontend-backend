@@ -14,6 +14,7 @@ import {
 import { FilterBar, createEmptyFilterValues, type FilterValues } from "../FilterBar";
 import { useNavigate, useSearchParams } from "react-router";
 import {
+  commentDocument,
   deleteDocument,
   getDocumentDownloadUrl,
   getStageFromFrontend,
@@ -21,6 +22,7 @@ import {
   listStageRecords,
   listValueHelp,
   replaceDocument,
+  reviewDocument,
   uploadDocuments,
 } from "../../lib/api";
 import { formatCurrency, formatDate, formatFileSize } from "../../lib/format";
@@ -50,11 +52,11 @@ type StageModuleConfig = {
 type ProcurementRecord = PRRecord | PORecord | GRNRecord;
 
 function isPRRecord(record: ProcurementRecord): record is PRRecord {
-  return "pr_number" in record && "document_type" in record;
+  return "pr_number" in record && "document_type" in record && !("po_number" in record) && !("grn_number" in record);
 }
 
 function isPORecord(record: ProcurementRecord): record is PORecord {
-  return "po_number" in record && "vendor" in record && "company_code" in record;
+  return "po_number" in record && "vendor" in record && "company_code" in record && !("grn_number" in record);
 }
 
 function isGRNRecord(record: ProcurementRecord): record is GRNRecord {
@@ -292,7 +294,7 @@ function ItemsSubTable({ record, stage }: { record: ProcurementRecord; stage: Ex
         <tbody>
           {pr.items.map((item, i) => (
             <tr key={item.item_number} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafbfc" }}>
-              <td style={SUB_TD}>{item.item_number}</td>
+              <td style={SUB_TD}>{item.item_number || "—"}</td>
               <td style={{ ...SUB_TD, color: "#0070F2" }}>{item.material || "—"}</td>
               <td style={SUB_TD}>{item.material_description || "—"}</td>
               <td style={SUB_TD}>{item.plant}</td>
@@ -315,7 +317,7 @@ function ItemsSubTable({ record, stage }: { record: ProcurementRecord; stage: Ex
         <tbody>
           {po.items.map((item, i) => (
             <tr key={item.item_number} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafbfc" }}>
-              <td style={SUB_TD}>{item.item_number}</td>
+              <td style={SUB_TD}>{item.item_number || "—"}</td>
               <td style={{ ...SUB_TD, color: "#0070F2" }}>{item.material}</td>
               <td style={SUB_TD}>{item.material_description || "—"}</td>
               <td style={SUB_TD}>{item.quantity}</td>
@@ -336,7 +338,7 @@ function ItemsSubTable({ record, stage }: { record: ProcurementRecord; stage: Ex
       <tbody>
         {grn.items.map((item, i) => (
           <tr key={item.item_number} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafbfc" }}>
-            <td style={SUB_TD}>{item.item_number}</td>
+            <td style={SUB_TD}>{item.item_number || "—"}</td>
             <td style={{ ...SUB_TD, color: "#0070F2" }}>{item.material}</td>
             <td style={SUB_TD}>{item.material_description || "—"}</td>
             <td style={SUB_TD}>{item.quantity}</td>
@@ -354,14 +356,16 @@ function ItemsSubTable({ record, stage }: { record: ProcurementRecord; stage: Ex
 // ─── Documents panel ────────────────────────────────────────────────────────────
 
 function DocumentsPanel({
-  reference, stage, docs, docsLoading, canModify, onReplace, onDelete,
+  reference, stage, docs, docsLoading, canModify, onReplace, onDelete, onReview, onComment,
 }: {
   reference: string; stage: StageKey; docs: StageDocument[];
   docsLoading: boolean; canModify: boolean;
   onReplace: (ref: string, docId: string) => void;
   onDelete: (docId: string) => Promise<void>;
+  onReview: (reference: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
+  onComment: (reference: string, doc: StageDocument) => Promise<void>;
 }) {
-  const cols = ["File Name", "Reference", "Version", "Upload Date", "Uploaded By", "Size", "Actions"];
+  const cols = ["File Name", "Reference", "Version", "Upload Date", "Uploaded By", "Decision", "Size", "Actions"];
   return (
     <div style={{ borderTop: "1px solid #dbeafe" }}>
       <div style={{ padding: "8px 14px", backgroundColor: "#f0f7ff", borderBottom: "1px solid #dbeafe", display: "flex", alignItems: "center", gap: "6px" }}>
@@ -381,17 +385,32 @@ function DocumentsPanel({
             <tbody>
               {docs.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "16px 14px", textAlign: "center", fontSize: "12px", color: "#94a3b8" }}>
+                  <td colSpan={8} style={{ padding: "16px 14px", textAlign: "center", fontSize: "12px", color: "#94a3b8" }}>
                     No documents uploaded for <strong>{reference}</strong>.
                   </td>
                 </tr>
               ) : docs.map((doc, i) => (
                 <tr key={doc._id} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafbfc" }}>
-                  <td style={{ ...SUB_TD, color: "#0070F2", minWidth: "200px" }}>{doc.original_filename}</td>
+                  <td style={{ ...SUB_TD, color: "#0070F2", minWidth: "240px" }}>
+                    <div>{doc.original_filename}</div>
+                    {doc.attachment_comment ? (
+                      <div style={{ marginTop: "6px", fontSize: "10px", color: "#64748b", whiteSpace: "normal" }}>
+                        Comment: {doc.attachment_comment}
+                      </div>
+                    ) : null}
+                  </td>
                   <td style={SUB_TD}>{reference}</td>
                   <td style={SUB_TD}>v{doc.version}</td>
                   <td style={SUB_TD}>{formatDate(doc.uploaded_at)}</td>
                   <td style={SUB_TD}>{doc.uploaded_by || "system"}</td>
+                  <td style={SUB_TD}>
+                    <div>{doc.review_status}</div>
+                    {doc.review_comment ? (
+                      <div style={{ marginTop: "4px", fontSize: "10px", color: "#64748b", whiteSpace: "normal" }}>
+                        Review note: {doc.review_comment}
+                      </div>
+                    ) : null}
+                  </td>
                   <td style={SUB_TD}>{formatFileSize(doc.file_size)}</td>
                   <td style={{ ...SUB_TD, borderRight: "none" }}>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
@@ -399,6 +418,18 @@ function DocumentsPanel({
                         style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #0070F2", color: "#0070F2", borderRadius: "6px", fontSize: "10px", fontWeight: "600", textDecoration: "none", backgroundColor: "#ffffff" }}>
                         <Eye size={10} /> View
                       </a>
+                      <button onClick={() => void onReview(reference, doc, "ACCEPTED")}
+                        style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #107E3E", color: "#107E3E", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
+                        Approve
+                      </button>
+                      <button onClick={() => void onReview(reference, doc, "REJECTED")}
+                        style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #BB0000", color: "#BB0000", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
+                        Reject
+                      </button>
+                      <button onClick={() => void onComment(reference, doc)}
+                        style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #d9d9d9", color: "#32363a", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
+                        {doc.attachment_comment ? "Edit Comment" : "Add Comment"}
+                      </button>
                       <a href={getDocumentDownloadUrl(stage, doc._id)}
                         style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #d9d9d9", color: "#32363a", borderRadius: "6px", fontSize: "10px", fontWeight: "600", textDecoration: "none", backgroundColor: "#ffffff" }}>
                         <Download size={10} /> Download
@@ -478,7 +509,7 @@ function UploadPanel({
 // ─── Full expanded content ──────────────────────────────────────────────────────
 
 function ExpandedRowContent({
-  record, stage, stageKey, docs, docsLoading, subTab, multiUpload, uploading, onUpload, onReplace, onDelete,
+  record, stage, stageKey, docs, docsLoading, subTab, multiUpload, uploading, onUpload, onReplace, onDelete, onReview, onComment,
 }: {
   record: ProcurementRecord; stage: Exclude<FrontendStageKey, "INV">; stageKey: StageKey;
   docs: StageDocument[]; docsLoading: boolean; subTab: "upload" | "change" | "view";
@@ -486,6 +517,8 @@ function ExpandedRowContent({
   onUpload: (ref: string, files: File[]) => Promise<void>;
   onReplace: (ref: string, docId: string) => void;
   onDelete: (docId: string) => Promise<void>;
+  onReview: (ref: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
+  onComment: (ref: string, doc: StageDocument) => Promise<void>;
 }) {
   const reference = getReference(record);
 
@@ -507,6 +540,7 @@ function ExpandedRowContent({
         <DocumentsPanel
           reference={reference} stage={stageKey} docs={docs} docsLoading={docsLoading}
           canModify={subTab === "change"} onReplace={onReplace} onDelete={onDelete}
+          onReview={onReview} onComment={onComment}
         />
       )}
 
@@ -527,6 +561,7 @@ function RecordsTable({
   stage, stageKey, records, config, expandedReferences, selectedReference,
   documentsByReference, loadingReferences, subTab, uploading,
   onRowClick, onUpload, onReplace, onDelete,
+  onReview, onComment,
 }: {
   stage: Exclude<FrontendStageKey, "INV">; stageKey: StageKey;
   records: ProcurementRecord[]; config: StageModuleConfig;
@@ -537,6 +572,8 @@ function RecordsTable({
   onUpload: (ref: string, files: File[]) => Promise<void>;
   onReplace: (ref: string, docId: string) => void;
   onDelete: (docId: string) => Promise<void>;
+  onReview: (ref: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
+  onComment: (ref: string, doc: StageDocument) => Promise<void>;
 }) {
   const headers = getHeaders(stage);
 
@@ -597,6 +634,7 @@ function RecordsTable({
                           docs={docs} docsLoading={docsLoading} subTab={subTab}
                           multiUpload={config.multiUpload} uploading={uploading}
                           onUpload={onUpload} onReplace={onReplace} onDelete={onDelete}
+                          onReview={onReview} onComment={onComment}
                         />
                       </td>
                     </tr>
@@ -772,6 +810,55 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
     }
   };
 
+  const handleReview = async (ref: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => {
+    setError(null);
+    let comment = "";
+    if (decision === "REJECTED") {
+      const promptText =
+        stage === "GRN"
+          ? "Enter the rejection reason for this GRN document."
+          : `Enter an optional comment for rejecting this ${config.frontendStage} document.`;
+      const entered = window.prompt(promptText, doc.review_comment || "");
+      if (entered === null) return;
+      comment = entered.trim();
+      if (stage === "GRN" && !comment) {
+        setError("GRN rejection requires a reason.");
+        return;
+      }
+    }
+
+    try {
+      const updated = await reviewDocument(stage, ref, doc._id, decision, comment || undefined);
+      setDocumentsByReference((prev) => ({
+        ...prev,
+        [ref]: (prev[ref] || []).map((item) => (item._id === updated._id ? updated : item)),
+      }));
+      setInfoMessage(`${config.title} document ${decision === "ACCEPTED" ? "approved" : "rejected"} successfully.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update document review status.");
+    }
+  };
+
+  const handleComment = async (ref: string, doc: StageDocument) => {
+    setError(null);
+    const entered = window.prompt(
+      `Add a comment for this ${config.frontendStage} attachment. Leave it blank to clear the existing comment.`,
+      doc.attachment_comment || ""
+    );
+    if (entered === null) return;
+
+    try {
+      const updated = await commentDocument(stage, ref, doc._id, entered.trim() || undefined);
+      setDocumentsByReference((prev) => ({
+        ...prev,
+        [ref]: (prev[ref] || []).map((item) => (item._id === updated._id ? updated : item)),
+      }));
+      setInfoMessage(`Comment ${entered.trim() ? "saved" : "cleared"} successfully.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save document comment.");
+    }
+  };
+
   // ── Render ─────────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -816,6 +903,8 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
               onUpload={handleUpload}
               onReplace={handleReplace}
               onDelete={handleDelete}
+              onReview={handleReview}
+              onComment={handleComment}
             />
           )}
         </div>

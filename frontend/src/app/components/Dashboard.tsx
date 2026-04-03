@@ -9,7 +9,6 @@ type SummaryRow = {
   total: number;
   uploaded: number;
   missing: number;
-  ocrReview: number;
 };
 
 type ApprovalRow = {
@@ -55,15 +54,12 @@ export function Dashboard() {
   useEffect(() => { void loadData(); }, []);
 
   const summaryRows = useMemo<SummaryRow[]>(() => {
-    if (!summary || !stages) return [];
+    if (!summary) return [];
     const rows: SummaryRow[] = ["PR", "PO", "GRN"].map((stage) => ({
       type: stageLabel(stage as StageKey),
       total: summary.document_upload_status[stage as StageKey].total,
       uploaded: summary.document_upload_status[stage as StageKey].with_docs,
       missing: summary.document_upload_status[stage as StageKey].missing,
-      ocrReview: stages[stage as StageKey].filter((item) =>
-        item.documents.some((d) => d.ocr_status === "REVIEW" || d.ocr_status === "INVALID")
-      ).length,
     }));
 
     const totals = rows.reduce(
@@ -72,13 +68,12 @@ export function Dashboard() {
         total: acc.total + row.total,
         uploaded: acc.uploaded + row.uploaded,
         missing: acc.missing + row.missing,
-        ocrReview: acc.ocrReview + row.ocrReview,
       }),
-      { type: "Total", total: 0, uploaded: 0, missing: 0, ocrReview: 0 }
+      { type: "Total", total: 0, uploaded: 0, missing: 0 }
     );
 
     return [...rows, totals];
-  }, [stages, summary]);
+  }, [summary]);
 
   const approvalRows = useMemo<ApprovalRow[]>(() => {
     if (!summary) return [];
@@ -196,7 +191,7 @@ export function Dashboard() {
               <table className="w-full" style={{ borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ backgroundColor: "#f5f5f5", borderBottom: "1px solid #d9d9d9" }}>
-                    {["Document Type", "Total", "Uploaded", "Not Uploaded", "OCR Review"].map((label) => (
+                    {["Document Type", "Total", "Uploaded", "Not Uploaded"].map((label) => (
                       <th
                         key={label}
                         className="text-left"
@@ -213,8 +208,7 @@ export function Dashboard() {
                       <td style={{ padding: "6px 12px", fontSize: "12px", color: "#32363a", fontWeight: row.type === "Total" ? "600" : "400", borderRight: "1px solid #e5e5e5" }}>{row.type}</td>
                       <td style={{ padding: "6px 12px", fontSize: "12px", color: "#32363a", borderRight: "1px solid #e5e5e5", textAlign: "right" }}>{row.total}</td>
                       <td style={{ padding: "6px 12px", fontSize: "12px", color: "#107E3E", borderRight: "1px solid #e5e5e5", textAlign: "right" }}>{row.uploaded}</td>
-                      <td style={{ padding: "6px 12px", fontSize: "12px", color: row.missing > 0 ? "#BB0000" : "#32363a", borderRight: "1px solid #e5e5e5", textAlign: "right" }}>{row.missing}</td>
-                      <td style={{ padding: "6px 12px", fontSize: "12px", color: row.ocrReview > 0 ? "#E9730C" : "#32363a", textAlign: "right" }}>{row.ocrReview}</td>
+                      <td style={{ padding: "6px 12px", fontSize: "12px", color: row.missing > 0 ? "#BB0000" : "#32363a", textAlign: "right" }}>{row.missing}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -18,11 +18,15 @@ from backend.app.utils.helpers import (
     serialize_doc, success_response, error_response, allowed_file, allowed_extensions_text
 )
 from backend.app.services.document_service import (
-    save_document, change_document, delete_document, review_document,
+    save_document, change_document, delete_document, review_document, update_document_comment,
     get_active_documents, get_document_by_id, OCRValidationError
 )
 
 grn_bp = Blueprint("goods_receipt", __name__)
+
+
+def _as_text(value):
+    return "" if value is None else str(value)
 
 
 def _extract_year(date_str):
@@ -39,7 +43,7 @@ def _format_grn_response(grn_doc):
 
     def reorder_item(item):
         ordered = OrderedDict()
-        ordered["itemNumber"]          = item.get("itemNumber", "")
+        ordered["itemNumber"]          = _as_text(item.get("itemNumber", item.get("item_number", item.get("item", ""))))
         ordered["material"]            = item.get("material", "")
         ordered["materialDescription"] = item.get("materialDescription", "")
         ordered["quantity"]            = item.get("quantity", "")
@@ -301,3 +305,21 @@ def review_grn_uploaded_document(grn_number, doc_id):
         return error_response(str(e), 400)
 
     return success_response(reviewed, f"GRN document {decision.lower()} successfully")
+
+
+@grn_bp.route("/<grn_number>/documents/<doc_id>/comment", methods=["PUT"])
+def comment_grn_uploaded_document(grn_number, doc_id):
+    grn = mongo.db.goods_receipts.find_one({"materialDocumentNumber": grn_number})
+    if not grn:
+        return error_response(f"GRN '{grn_number}' not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    comment = body.get("comment")
+    commented_by = body.get("commented_by")
+
+    doc = get_document_by_id(doc_id)
+    if not doc or doc.get("stage") != "GRN" or doc.get("reference_number") != grn_number:
+        return error_response("Document not found", 404)
+
+    updated = update_document_comment(doc_id, comment=comment, commented_by=commented_by)
+    return success_response(updated, "GRN document comment saved successfully")

@@ -27,7 +27,7 @@ STAGE_KEYWORDS = {
     ],
     "GRN": [
         "goods receipt", "grn", "goods received", "material document",
-        "posting date", "document date", "goods receipt note", "grn-"
+        "posting date", "document date", "goods receipt note", "goods received note", "grn-"
     ],
     "INVOICE": [
         "invoice", "tax invoice", "invoice number", "bill to",
@@ -87,6 +87,25 @@ def _find_number(text: str, ref_number: str) -> bool:
     clean_text = re.sub(r"[\s\-]", "", text).lower()
     return clean_ref in clean_text
 
+
+def _contains_grn_reference(text: str) -> bool:
+    lower = text.lower()
+    keyword_hits = any(
+        marker in lower for marker in (
+            "goods receipt note",
+            "goods received note",
+            "goods receipt",
+            "goods received",
+            "material document",
+            "grn number",
+            "grn no",
+            "grn:",
+        )
+    )
+    number_pattern_hit = re.search(r"\bgrn[\s\-:/#]*\d+\b", lower) is not None
+    material_doc_hit = re.search(r"\bmaterial\s+document(\s+number|\s+no\.?)?[\s\-:/#]*\d+\b", lower) is not None
+    return keyword_hits or number_pattern_hit or material_doc_hit
+
 # ── main validation entry point ───────────────────────────────────────────────
 
 def validate_document(file_path: str, stage: str, reference_number: str,
@@ -100,6 +119,7 @@ def validate_document(file_path: str, stage: str, reference_number: str,
         "document_type_detected": str | None,
         "expected_number_found": bool,
         "cross_reference_valid": bool,   # only for PO
+        "grn_reference_found": bool,     # only meaningful for PO
         "confidence": float (0-1),
         "raw_text_snippet": str,
         "issues": [str]
@@ -114,6 +134,7 @@ def validate_document(file_path: str, stage: str, reference_number: str,
             "document_type_detected": None,
             "expected_number_found": False,
             "cross_reference_valid": False,
+            "grn_reference_found": False,
             "confidence": 0.0,
             "raw_text_snippet": "",
             "issues": ["File not found on server"]
@@ -125,6 +146,7 @@ def validate_document(file_path: str, stage: str, reference_number: str,
             "document_type_detected": None,
             "expected_number_found": False,
             "cross_reference_valid": False,
+            "grn_reference_found": False,
             "confidence": 0.0,
             "raw_text_snippet": "",
             "issues": [f"OCR skipped for unsupported file type '.{ext}'."]
@@ -136,6 +158,7 @@ def validate_document(file_path: str, stage: str, reference_number: str,
     detected_stage = _detect_stage(raw_text)
     expected_number_found = _find_number(raw_text, reference_number)
     cross_reference_valid = True  # default true unless PO check fails
+    grn_reference_found = stage.upper() == "PO" and _contains_grn_reference(raw_text)
 
     # ── type check ──
     type_conflict = detected_stage is not None and detected_stage != stage.upper()
@@ -149,6 +172,10 @@ def validate_document(file_path: str, stage: str, reference_number: str,
             issues.append("GRN documents cannot be uploaded in the PO document slot.")
     elif type_unknown and not expected_number_found:
         issues.append(f"Could not confidently identify document type for {stage.upper()}.")
+
+    if stage.upper() == "PO" and grn_reference_found:
+        issues.append("PO upload rejected because a GRN number or Goods Receipt Note content was detected in the document.")
+        issues.append("A Purchase Order upload must contain PO content only and must not contain any GRN number.")
 
     # ── number presence check ──
     if not expected_number_found:
@@ -179,7 +206,7 @@ def validate_document(file_path: str, stage: str, reference_number: str,
 
     if stage.upper() == "PO":
         score = type_score + (0.35 if num_ok else 0.0) + (0.25 if xref_ok else 0.0)
-        if detected_stage == "GRN":
+        if detected_stage == "GRN" or grn_reference_found:
             score = 0.0
     else:
         score = type_score + (0.5 if num_ok else 0.0)
@@ -197,6 +224,7 @@ def validate_document(file_path: str, stage: str, reference_number: str,
         "document_type_detected": detected_stage,
         "expected_number_found": expected_number_found,
         "cross_reference_valid": cross_reference_valid,
+        "grn_reference_found": grn_reference_found,
         "confidence": round(score, 2),
         "raw_text_snippet": snippet,
         "issues": issues
@@ -235,6 +263,7 @@ def build_rejection_explanation(ocr_result: dict, stage: str, reference_number: 
     detected_type = ocr_result.get("document_type_detected")
     num_found     = ocr_result.get("expected_number_found", False)
     xref_valid    = ocr_result.get("cross_reference_valid", True)
+    grn_ref_found = ocr_result.get("grn_reference_found", False)
     snippet       = ocr_result.get("raw_text_snippet", "")
 
     # ── confidence label ──
@@ -338,6 +367,22 @@ def build_rejection_explanation(ocr_result: dict, stage: str, reference_number: 
                 f"Ensure the PO document explicitly mentions the PR number '{linked_pr}'. "
                 f"If the document is correct, check whether the number appears in a table "
                 f"cell or header that may have been missed during OCR extraction."
+            )
+        })
+
+    if stage.upper() == "PO" and grn_ref_found:
+        failure_reasons.append({
+            "check":       "GRN Reference Detection",
+            "expected":    "No GRN number or Goods Receipt Note content in the PO upload",
+            "found":       "GRN-related text detected in OCR content",
+            "explanation": (
+                "The uploaded file contains GRN-related wording or numbering such as "
+                "'Goods Receipt Note', 'Goods Received Note', 'GRN', or 'Material Document'. "
+                "That means the file is not acceptable for the Purchase Order attachment slot."
+            ),
+            "suggestion":  (
+                "Upload the Purchase Order document only. Remove any GRN document and make sure "
+                "the uploaded file does not contain a GRN number or Goods Receipt Note content."
             )
         })
 

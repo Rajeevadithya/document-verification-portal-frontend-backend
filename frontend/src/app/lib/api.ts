@@ -44,6 +44,12 @@ function asString(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
+function asText(value: unknown) {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+
 function normalizeStageDocument(document: any): StageDocument {
   return {
     _id: asString(document?._id),
@@ -61,6 +67,9 @@ function normalizeStageDocument(document: any): StageDocument {
     review_comment: typeof document?.review_comment === "string" ? document.review_comment : null,
     reviewed_by: document?.reviewed_by ? asString(document.reviewed_by) : null,
     reviewed_at: document?.reviewed_at ? asString(document.reviewed_at) : null,
+    attachment_comment: typeof document?.attachment_comment === "string" ? document.attachment_comment : null,
+    commented_by: document?.commented_by ? asString(document.commented_by) : null,
+    commented_at: document?.commented_at ? asString(document.commented_at) : null,
     version: toNumber(document?.version, 1),
     is_active: Boolean(document?.is_active),
     uploaded_by: document?.uploaded_by ? asString(document.uploaded_by) : undefined,
@@ -73,7 +82,7 @@ function normalizePrItem(item: any): PRItem {
   const price = toNumber(item?.price ?? item?.valuation_price);
   const amount = toNumber(item?.amount, price * toNumber(item?.quantity));
   return {
-    item_number: asString(item?.item_number ?? item?.itemNumber),
+    item_number: asText(item?.item_number ?? item?.itemNumber),
     material: asString(item?.material),
     material_description: asString(item?.material_description ?? item?.materialDescription),
     plant: asString(item?.plant),
@@ -93,7 +102,7 @@ function normalizePoItem(item: any): POItem {
   const price = toNumber(item?.price ?? item?.net_price);
   const amount = toNumber(item?.amount, price * toNumber(item?.quantity));
   return {
-    item_number: asString(item?.item_number ?? item?.itemNumber),
+    item_number: asText(item?.item_number ?? item?.itemNumber),
     material: asString(item?.material),
     material_description: asString(item?.material_description ?? item?.materialDescription),
     quantity: toNumber(item?.quantity),
@@ -110,7 +119,7 @@ function normalizeGrnItem(item: any): GRNItem {
   const quantity = toNumber(item?.quantity);
   const price = toNumber(item?.price);
   const amount = toNumber(item?.amount, price * quantity);
-  const itemNumber = asString(item?.item_number ?? item?.itemNumber ?? item?.item);
+  const itemNumber = asText(item?.item_number ?? item?.itemNumber ?? item?.item);
   return {
     item: itemNumber,
     item_number: itemNumber,
@@ -477,6 +486,21 @@ export async function reviewDocument(stage: StageKey, referenceNumber: string, d
       decision,
       comment,
       reviewed_by: DEFAULT_UPLOADER,
+    }),
+  });
+  return normalizeStageDocument(data);
+}
+
+export async function commentDocument(stage: StageKey, referenceNumber: string, documentId: string, comment?: string) {
+  const route = ROUTE_MAP[stage];
+  const data = await request<any>(`/${route}/${referenceNumber}/documents/${documentId}/comment`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      comment,
+      commented_by: DEFAULT_UPLOADER,
     }),
   });
   return normalizeStageDocument(data);

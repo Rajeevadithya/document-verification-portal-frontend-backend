@@ -19,7 +19,7 @@ from backend.app.utils.helpers import (
     serialize_doc, success_response, error_response, allowed_file, allowed_extensions_text
 )
 from backend.app.services.document_service import (
-    save_document, change_document, delete_document, review_document,
+    save_document, change_document, delete_document, review_document, update_document_comment,
     get_active_documents, get_document_by_id, OCRValidationError
 )
 
@@ -38,12 +38,16 @@ def _calc_net_order_value(items):
         return 0.0
 
 
+def _as_text(value):
+    return "" if value is None else str(value)
+
+
 def _format_po_response(po_doc):
     serialized = serialize_doc(po_doc)
 
     def reorder_item(item):
         ordered = OrderedDict()
-        ordered["itemNumber"]          = item.get("itemNumber", "")
+        ordered["itemNumber"]          = _as_text(item.get("itemNumber", item.get("item_number", "")))
         ordered["material"]            = item.get("material", "")
         ordered["materialDescription"] = item.get("materialDescription", "")
         ordered["quantity"]            = item.get("quantity", "")
@@ -185,7 +189,7 @@ def upload_po_document(po_number):
             400,
         )
     if _looks_like_grn_filename(f.filename):
-        return error_response("GRN-named files are not allowed in the PO upload.", 400)
+        return error_response("PO upload rejected. The selected file name looks like a GRN document. Upload a Purchase Order document only, with no GRN number.", 400)
 
     linked_pr = po.get("purchaseRequisitionNumber") or ""
 
@@ -236,7 +240,7 @@ def change_po_document(po_number, doc_id):
             400,
         )
     if _looks_like_grn_filename(f.filename):
-        return error_response("GRN-named files are not allowed in the PO upload.", 400)
+        return error_response("PO upload rejected. The selected file name looks like a GRN document. Upload a Purchase Order document only, with no GRN number.", 400)
 
     linked_pr = po.get("purchaseRequisitionNumber") or ""
 
@@ -317,3 +321,21 @@ def review_po_uploaded_document(po_number, doc_id):
         return error_response(str(e), 400)
 
     return success_response(reviewed, f"PO document {decision.lower()} successfully")
+
+
+@po_bp.route("/<po_number>/documents/<doc_id>/comment", methods=["PUT"])
+def comment_po_uploaded_document(po_number, doc_id):
+    po = mongo.db.purchase_orders.find_one({"purchaseOrderNumber": po_number})
+    if not po:
+        return error_response(f"PO '{po_number}' not found", 404)
+
+    body = request.get_json(silent=True) or {}
+    comment = body.get("comment")
+    commented_by = body.get("commented_by")
+
+    doc = get_document_by_id(doc_id)
+    if not doc or doc.get("stage") != "PO" or doc.get("reference_number") != po_number:
+        return error_response("Document not found", 404)
+
+    updated = update_document_comment(doc_id, comment=comment, commented_by=commented_by)
+    return success_response(updated, "PO document comment saved successfully")

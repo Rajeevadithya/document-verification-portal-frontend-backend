@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Download, Edit, Eye, Link2, LoaderCircle, Paperclip } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { FilterBar, createEmptyFilterValues, type FilterValues } from "../FilterBar";
-import { getDocumentDownloadUrl, getStageRecord, listDocuments, listStageRecords, listValueHelp, replaceDocument, reviewDocument, uploadDocuments } from "../../lib/api";
+import { commentDocument, getDocumentDownloadUrl, getStageRecord, listDocuments, listStageRecords, listValueHelp, replaceDocument, reviewDocument, uploadDocuments } from "../../lib/api";
 import { formatCurrency, formatDate, formatFileSize } from "../../lib/format";
 import { ModuleFooterAlerts, SelectionPlaceholder } from "./ModuleExperience";
 import type {
@@ -125,6 +125,7 @@ function AttachmentSubCard({
   docs,
   loading,
   onReview,
+  onComment,
 }: {
   title: string;
   stage: StageKey;
@@ -132,6 +133,7 @@ function AttachmentSubCard({
   docs: StageDocument[];
   loading: boolean;
   onReview: (stage: "PR" | "PO" | "GRN", reference: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
+  onComment: (stage: "PR" | "PO" | "GRN", reference: string, doc: StageDocument) => Promise<void>;
 }) {
   return (
     <div
@@ -186,10 +188,24 @@ function AttachmentSubCard({
             <tbody>
               {docs.map((doc, index) => (
                 <tr key={doc._id} style={{ backgroundColor: index % 2 === 0 ? "#ffffff" : "#fafcff" }}>
-                  <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "600" }}>{doc.original_filename}</td>
+                  <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "600", whiteSpace: "normal" }}>
+                    <div>{doc.original_filename}</div>
+                    {doc.attachment_comment ? (
+                      <div style={{ marginTop: "6px", fontSize: "11px", fontWeight: "500", color: "#64748b" }}>
+                        Comment: {doc.attachment_comment}
+                      </div>
+                    ) : null}
+                  </td>
                   <td style={TD_STYLE}>v{doc.version}</td>
                   <td style={TD_STYLE}>{formatDate(doc.uploaded_at)}</td>
-                  <td style={TD_STYLE}>{doc.review_status}</td>
+                  <td style={TD_STYLE}>
+                    <div>{doc.review_status}</div>
+                    {doc.review_comment ? (
+                      <div style={{ marginTop: "6px", fontSize: "11px", color: "#64748b", whiteSpace: "normal" }}>
+                        Review note: {doc.review_comment}
+                      </div>
+                    ) : null}
+                  </td>
                   <td style={{ ...TD_STYLE, borderRight: "none" }}>
                     <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                       <a
@@ -214,13 +230,19 @@ function AttachmentSubCard({
                             onClick={() => void onReview(stage, reference, doc, "ACCEPTED")}
                             style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#107E3E", backgroundColor: "transparent", border: "none", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
                           >
-                            Accept
+                            Approve
                           </button>
                           <button
                             onClick={() => void onReview(stage, reference, doc, "REJECTED")}
                             style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#BB0000", backgroundColor: "transparent", border: "none", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
+                        >
+                          Reject
+                        </button>
+                          <button
+                            onClick={() => void onComment(stage, reference, doc)}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "4px", color: "#475569", backgroundColor: "transparent", border: "none", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
                           >
-                            Reject
+                            {doc.attachment_comment ? "Edit Comment" : "Add Comment"}
                           </button>
                         </>
                       ) : null}
@@ -922,6 +944,25 @@ export function InvoiceModule() {
     }
   };
 
+  const handleLinkedDocumentComment = async (stage: "PR" | "PO" | "GRN", reference: string, doc: StageDocument) => {
+    setError(null);
+    const entered = window.prompt(
+      `Add a comment for this ${stage} attachment. Leave it blank to clear the existing comment.`,
+      doc.attachment_comment || ""
+    );
+    if (entered === null) return;
+
+    try {
+      const updated = await commentDocument(stage, reference, doc._id, entered.trim() || undefined);
+      setLinkedDocs((current) => ({
+        ...current,
+        [stage]: current[stage].map((item) => (item._id === updated._id ? updated : item)),
+      }));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Unable to save document comment.");
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", gap: "8px", color: "#6A6D70", fontSize: "13px" }}>
@@ -1074,7 +1115,7 @@ export function InvoiceModule() {
                       {activeAggregate.purchase_requisition.items.map((item, index) => (
                         <tr key={item.item_number} style={{ backgroundColor: index % 2 === 0 ? "#ffffff" : "#fafcff" }}>
                           <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "700" }}>{index === 0 ? activeAggregate.purchase_requisition?.pr_number : ""}</td>
-                          <td style={TD_STYLE}>{item.item_number}</td>
+                          <td style={TD_STYLE}>{item.item_number || "—"}</td>
                           <td style={TD_STYLE}>{item.material || ""}</td>
                           <td style={TD_STYLE}>{item.material_description || ""}</td>
                           <td style={TD_STYLE}>{item.plant}</td>
@@ -1092,6 +1133,7 @@ export function InvoiceModule() {
                       docs={linkedDocs.PR}
                       loading={docsLoading.PR}
                       onReview={handleLinkedDocumentReview}
+                      onComment={handleLinkedDocumentComment}
                     />
                   </>
                 ) : (
@@ -1109,7 +1151,7 @@ export function InvoiceModule() {
                       {activeAggregate.purchase_order.items.map((item, index) => (
                         <tr key={item.item_number} style={{ backgroundColor: index % 2 === 0 ? "#ffffff" : "#fafcff" }}>
                           <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "700" }}>{index === 0 ? activeAggregate.purchase_order?.po_number : ""}</td>
-                          <td style={TD_STYLE}>{item.item_number}</td>
+                          <td style={TD_STYLE}>{item.item_number || "—"}</td>
                           <td style={TD_STYLE}>{item.material || ""}</td>
                           <td style={TD_STYLE}>{item.material_description || ""}</td>
                           <td style={{ ...TD_STYLE, textAlign: "right" }}>{item.quantity}</td>
@@ -1126,6 +1168,7 @@ export function InvoiceModule() {
                       docs={linkedDocs.PO}
                       loading={docsLoading.PO}
                       onReview={handleLinkedDocumentReview}
+                      onComment={handleLinkedDocumentComment}
                     />
                   </>
                 ) : (
@@ -1143,7 +1186,7 @@ export function InvoiceModule() {
                       {activeAggregate.goods_receipt.items.map((item, index) => (
                         <tr key={item.item_number} style={{ backgroundColor: index % 2 === 0 ? "#ffffff" : "#fafcff" }}>
                           <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "700" }}>{index === 0 ? activeAggregate.goods_receipt?.grn_number : ""}</td>
-                          <td style={TD_STYLE}>{item.item_number}</td>
+                          <td style={TD_STYLE}>{item.item_number || "—"}</td>
                           <td style={TD_STYLE}>{item.material || ""}</td>
                           <td style={TD_STYLE}>{item.material_description || ""}</td>
                           <td style={{ ...TD_STYLE, textAlign: "right" }}>{item.quantity}</td>
@@ -1161,6 +1204,7 @@ export function InvoiceModule() {
                       docs={linkedDocs.GRN}
                       loading={docsLoading.GRN}
                       onReview={handleLinkedDocumentReview}
+                      onComment={handleLinkedDocumentComment}
                     />
                   </>
                 ) : (

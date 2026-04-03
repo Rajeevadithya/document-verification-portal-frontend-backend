@@ -87,6 +87,9 @@ export type StageDocument = {
   review_comment?: string | null;
   reviewed_by?: string | null;
   reviewed_at?: string | null;
+  attachment_comment?: string | null;
+  commented_by?: string | null;
+  commented_at?: string | null;
   version: number;
   is_active: boolean;
   uploaded_by?: string;
