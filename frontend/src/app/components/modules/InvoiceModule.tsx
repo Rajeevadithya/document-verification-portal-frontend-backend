@@ -1055,7 +1055,7 @@ export function InvoiceModule() {
                           <td style={{ ...TD_STYLE, textAlign: "right" }}>{formatCurrency(item.price)}</td>
                           <td style={{ ...TD_STYLE, textAlign: "right" }}>{formatCurrency(item.amount)}</td>
                           <td style={TD_STYLE}>{item.plant}</td>
-                          <td style={{ ...TD_STYLE, borderRight: "none" }}>{item.purchase_order || activeAggregate.goods_receipt?.po_number || ""}</td>
+                          <td style={{ ...TD_STYLE, borderRight: "none" }}>{index === 0 ? item.purchase_order || activeAggregate.goods_receipt?.po_number || "" : ""}</td>
                         </tr>
                       ))}
                     </DataTable>

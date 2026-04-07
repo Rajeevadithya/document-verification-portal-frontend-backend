@@ -105,27 +105,27 @@ export function ModuleFooterAlerts({
   const validationAlert = getValidationAlert(validation ?? null);
   if (validationAlert) alerts.push(validationAlert);
 
+  if (alerts.length === 0) return null;
+
   return (
     <div className="border-t px-4 py-3 flex-shrink-0" style={{ backgroundColor: "#ffffff", borderColor: "#d9d9d9" }}>
       <div className="flex items-center gap-2 mb-2" style={{ fontSize: "11px", fontWeight: "600", color: "#32363a" }}>
       </div>
-      {alerts.length === 0 ? null : (
-        <div className="flex flex-wrap gap-3">
-          {alerts.map((alert) => {
-            const tone = toneStyles(alert.tone);
-            const Icon = tone.icon;
-            return (
-              <div key={alert.key} className="border px-3 py-2 flex items-start gap-2 flex-1 min-w-[260px]" style={{ borderColor: tone.borderColor, backgroundColor: tone.backgroundColor, borderRadius: "2px" }}>
-                <Icon size={14} color={tone.color} className="mt-[2px] flex-shrink-0" />
-                <div>
-                  <div style={{ fontSize: "12px", fontWeight: "600", color: tone.color }}>{alert.title}</div>
-                  <div style={{ fontSize: "11px", color: "#32363a", marginTop: "2px" }}>{alert.description}</div>
-                </div>
+      <div className="flex flex-wrap gap-3">
+        {alerts.map((alert) => {
+          const tone = toneStyles(alert.tone);
+          const Icon = tone.icon;
+          return (
+            <div key={alert.key} className="border px-3 py-2 flex items-start gap-2 flex-1 min-w-[260px]" style={{ borderColor: tone.borderColor, backgroundColor: tone.backgroundColor, borderRadius: "2px" }}>
+              <Icon size={14} color={tone.color} className="mt-[2px] flex-shrink-0" />
+              <div>
+                <div style={{ fontSize: "12px", fontWeight: "600", color: tone.color }}>{alert.title}</div>
+                <div style={{ fontSize: "11px", color: "#32363a", marginTop: "2px" }}>{alert.description}</div>
               </div>
-            );
-          })}
-        </div>
-      )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

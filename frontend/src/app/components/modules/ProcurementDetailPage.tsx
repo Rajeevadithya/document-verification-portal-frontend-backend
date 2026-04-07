@@ -719,6 +719,7 @@ export function ProcurementDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(subTab === "upload" || subTab === "view" || subTab === "change" ? "Attachment" : "Items");
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const itemsSectionRef = useRef<HTMLDivElement>(null);
   const attachmentsSectionRef = useRef<HTMLDivElement>(null);
 
@@ -792,6 +793,12 @@ export function ProcurementDetailPage() {
   const goToSection = (section: "Items" | "Attachment") => {
     setActiveTab(section);
     const target = section === "Items" ? itemsSectionRef.current : attachmentsSectionRef.current;
+    const container = scrollAreaRef.current;
+    if (target && container) {
+      const top = target.offsetTop - 120;
+      container.scrollTo({ top: Math.max(top, 0), behavior: "smooth" });
+      return;
+    }
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
@@ -837,7 +844,7 @@ export function ProcurementDetailPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", backgroundColor: "#f1f5f9" }}>
+      <div ref={scrollAreaRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", backgroundColor: "#f1f5f9" }}>
         <div style={{ padding: "28px 32px", display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1600px" }}>
 
           {/* ── Hero header card ─────────────────────────────────────── */}
