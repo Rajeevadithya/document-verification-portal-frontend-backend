@@ -2,7 +2,6 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
   Edit,
-  Eye,
   FileUp,
   LoaderCircle,
   Trash2,
@@ -50,6 +49,7 @@ type StageModuleConfig = {
 };
 
 type ProcurementRecord = PRRecord | PORecord | GRNRecord;
+type StageFilterKey = keyof FilterValues;
 
 function isPRRecord(record: ProcurementRecord): record is PRRecord {
   return "pr_number" in record && "document_type" in record && !("po_number" in record) && !("grn_number" in record);
@@ -147,21 +147,62 @@ function getYear(r: ProcurementRecord) {
   if (isGRNRecord(r)) return new Date(r.document_date).getFullYear().toString();
   return new Date(r.created_at).getFullYear().toString();
 }
+function getStageFilterKeys(stage: Exclude<FrontendStageKey, "INV">): StageFilterKey[] {
+  if (stage === "PR") return ["search", "editingStatus", "docNumber", "documentType"];
+  if (stage === "PO") return ["search", "editingStatus", "purchaseOrder", "material", "plant", "companyCode", "purchasingGroup"];
+  return ["search", "editingStatus", "materialDocument", "materialDocumentYear", "material", "plant"];
+}
+function getPrimaryFilterKey(stage: Exclude<FrontendStageKey, "INV">): StageFilterKey {
+  if (stage === "PO") return "purchaseOrder";
+  if (stage === "GRN") return "materialDocument";
+  return "docNumber";
+}
+function filtersFromSearchParams(stage: Exclude<FrontendStageKey, "INV">, searchParams: URLSearchParams) {
+  const primaryKey = getPrimaryFilterKey(stage);
+  const docValue = searchParams.get("doc");
+  const next = createEmptyFilterValues();
+
+  for (const key of getStageFilterKeys(stage)) {
+    next[key] = searchParams.get(key) ?? "";
+  }
+
+  if (docValue && !next[primaryKey]) {
+    next[primaryKey] = docValue;
+  }
+
+  return next;
+}
+function buildListSearchParams(stage: Exclude<FrontendStageKey, "INV">, action: "upload" | "change" | "view", filters: FilterValues) {
+  const params = new URLSearchParams();
+  params.set("tab", stage);
+  params.set("action", action);
+
+  const primaryKey = getPrimaryFilterKey(stage);
+  const primaryValue = filters[primaryKey].trim();
+  if (primaryValue) {
+    params.set("doc", primaryValue);
+  }
+
+  for (const key of getStageFilterKeys(stage)) {
+    const value = filters[key].trim();
+    if (value) {
+      params.set(key, value);
+    }
+  }
+
+  return params;
+}
 function buildFieldOptions(records: ProcurementRecord[], stage: Exclude<FrontendStageKey, "INV">) {
   const opts = (vals: string[]) => Array.from(new Set(vals.filter(Boolean))).sort();
   if (stage === "PR") return { editingStatus: opts(records.map(getStatus)), documentType: opts(records.map(getDocType)) };
-  if (stage === "PO") return { editingStatus: opts(records.map(getStatus)), status: opts(records.map(getStatus)) };
-  return { stockChange: opts(records.map(getStatus)) };
+  if (stage === "PO") return { editingStatus: opts(records.map(getStatus)) };
+  return { editingStatus: opts(records.map(getStatus)) };
 }
 
 // ─── Filter matching ────────────────────────────────────────────────────────────
 
 function inc(v: string | undefined, s: string) {
   return (v || "").toLowerCase().includes(s.toLowerCase());
-}
-function matchDate(v: string | undefined, f: string) {
-  if (!f) return true;
-  return (v || "").slice(0, 10) === f;
 }
 function matchesFilters(r: ProcurementRecord, f: FilterValues, stage: Exclude<FrontendStageKey, "INV">) {
   const ref = getReference(r);
@@ -176,28 +217,23 @@ function matchesFilters(r: ProcurementRecord, f: FilterValues, stage: Exclude<Fr
   if (stage === "PO") {
     if (!isPORecord(r)) return false;
     const po = r;
+    if (search && ![ref, getPlant(r), getMaterial(r), getStatus(r), po.company_code, po.purchase_group].join(" ").toLowerCase().includes(search)) return false;
     if (f.purchaseOrder && po.po_number !== f.purchaseOrder) return false;
     if (f.editingStatus && getStatus(r) !== f.editingStatus) return false;
-    if (f.supplier && !inc(po.vendor, f.supplier)) return false;
     if (f.purchasingGroup && !inc(po.purchase_group, f.purchasingGroup)) return false;
     if (f.companyCode && !inc(po.company_code, f.companyCode)) return false;
-    if (f.status && getStatus(r) !== f.status) return false;
     if (f.material && !po.items.some((i) => inc(i.material, f.material))) return false;
     if (f.plant && !inc(getPlant(r), f.plant)) return false;
-    if (!matchDate(po.created_at, f.purchaseOrderDate)) return false;
     return true;
   }
   if (!isGRNRecord(r)) return false;
   const grn = r;
+  if (search && ![ref, getPlant(r), getMaterial(r), getStatus(r), getYear(grn)].join(" ").toLowerCase().includes(search)) return false;
   if (f.materialDocument && grn.grn_number !== f.materialDocument) return false;
-  if (f.stockChange && getStatus(r) !== f.stockChange) return false;
+  if (f.editingStatus && getStatus(r) !== f.editingStatus) return false;
   if (f.plant && !inc(getPlant(r), f.plant)) return false;
-  if (f.storageLocation && !inc(getStorageLocation(r), f.storageLocation)) return false;
-  if (f.stockType && !inc(getStatus(r), f.stockType)) return false;
   if (f.materialDocumentYear && getYear(grn) !== f.materialDocumentYear) return false;
   if (f.material && !grn.items.some((i) => inc(i.material, f.material))) return false;
-  if (!matchDate(grn.posting_date, f.postingDate)) return false;
-  if (!matchDate(grn.document_date, f.documentDate)) return false;
   return true;
 }
 
@@ -356,20 +392,24 @@ function ItemsSubTable({ record, stage }: { record: ProcurementRecord; stage: Ex
 // ─── Documents panel ────────────────────────────────────────────────────────────
 
 function DocumentsPanel({
-  reference, stage, docs, docsLoading, canModify, onReplace, onDelete, onReview, onComment,
+  reference, stage, docs, docsLoading, mode, onReview, onComment, onReplace, onDelete,
 }: {
   reference: string; stage: StageKey; docs: StageDocument[];
-  docsLoading: boolean; canModify: boolean;
-  onReplace: (ref: string, docId: string) => void;
-  onDelete: (docId: string) => Promise<void>;
+  docsLoading: boolean;
+  mode: "change" | "view";
   onReview: (reference: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED", comment?: string) => Promise<void>;
   onComment: (reference: string, doc: StageDocument, comment?: string) => Promise<void>;
+  onReplace: (reference: string, doc: StageDocument, file: File) => Promise<void>;
+  onDelete: (reference: string, doc: StageDocument) => Promise<void>;
 }) {
   const cols = ["File Name", "Reference", "Version", "Upload Date", "Uploaded By", "Decision", "Size", "Actions"];
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
-  const [editor, setEditor] = useState<{ mode: "comment" | "approve" | "reject"; docId: string } | null>(null);
+  const [editor, setEditor] = useState<{ mode: "reject"; docId: string } | null>(null);
+  const [deletePromptDocId, setDeletePromptDocId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [busyDocId, setBusyDocId] = useState<string | null>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
   const activeDoc = docs.find((doc) => doc._id === selectedDocId) || docs[0] || null;
 
   useEffect(() => {
@@ -379,10 +419,10 @@ function DocumentsPanel({
     });
   }, [docs]);
 
-  const openEditor = (mode: "comment" | "approve" | "reject", doc: StageDocument) => {
+  const openEditor = (mode: "reject", doc: StageDocument) => {
     setSelectedDocId(doc._id);
     setEditor({ mode, docId: doc._id });
-    setDraftText(mode === "comment" ? doc.attachment_comment || "" : doc.review_comment || "");
+    setDraftText(doc.review_status === "REJECTED" ? doc.attachment_comment || doc.review_comment || "" : "");
   };
 
   const closeEditor = () => {
@@ -390,28 +430,81 @@ function DocumentsPanel({
     setDraftText("");
   };
 
+  const closeDeletePrompt = () => {
+    setDeletePromptDocId(null);
+  };
+
+  const handleDeleteComment = async () => {
+    if (!activeDoc || deletePromptDocId !== activeDoc._id) return;
+    setSubmitting(true);
+    try {
+      await onComment(reference, activeDoc, undefined);
+      closeDeletePrompt();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!editor) return;
     const doc = docs.find((item) => item._id === editor.docId);
     if (!doc) return;
     const cleanText = draftText.trim();
-    if (editor.mode === "reject" && stage === "GRN" && !cleanText) return;
+    if (stage === "GRN" && !cleanText) return;
 
     setSubmitting(true);
     try {
-      if (editor.mode === "comment") {
-        await onComment(reference, doc, cleanText || undefined);
-      } else {
-        await onReview(reference, doc, editor.mode === "approve" ? "ACCEPTED" : "REJECTED", cleanText || undefined);
-      }
+      await onComment(reference, doc, cleanText || undefined);
+      await onReview(reference, doc, "REJECTED", undefined);
       closeEditor();
     } finally {
       setSubmitting(false);
     }
   };
 
+  const handleReplaceClick = (doc: StageDocument) => {
+    setSelectedDocId(doc._id);
+    setBusyDocId(doc._id);
+    replaceInputRef.current?.click();
+  };
+
+  const handleReplaceChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    const doc = docs.find((item) => item._id === busyDocId);
+    event.target.value = "";
+    if (!file || !doc) {
+      setBusyDocId(null);
+      return;
+    }
+
+    try {
+      await onReplace(reference, doc, file);
+    } finally {
+      setBusyDocId(null);
+    }
+  };
+
+  const handleDeleteClick = async (doc: StageDocument) => {
+    setSelectedDocId(doc._id);
+    const confirmed = window.confirm(`Delete "${doc.original_filename}" from ${reference}?`);
+    if (!confirmed) return;
+    setBusyDocId(doc._id);
+    try {
+      await onDelete(reference, doc);
+    } finally {
+      setBusyDocId(null);
+    }
+  };
+
   return (
     <div style={{ borderTop: "1px solid #dbeafe" }}>
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.doc,.docx,.xls,.xlsx,.csv,.txt"
+        style={{ display: "none" }}
+        onChange={(event) => void handleReplaceChange(event)}
+      />
       <div style={{ padding: "8px 14px", backgroundColor: "#f0f7ff", borderBottom: "1px solid #dbeafe", display: "flex", alignItems: "center", gap: "6px" }}>
         <Paperclip size={12} color="#1d4ed8" />
         <span style={{ fontSize: "11px", fontWeight: "700", color: "#1e40af" }}>
@@ -435,7 +528,26 @@ function DocumentsPanel({
                 </tr>
               ) : docs.map((doc, i) => (
                 <tr key={doc._id} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafbfc" }}>
-                  <td style={{ ...SUB_TD, color: "#0070F2", minWidth: "240px" }}>{doc.original_filename}</td>
+                  <td style={{ ...SUB_TD, minWidth: "240px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <a
+                        href={getDocumentDownloadUrl(stage, doc._id, true)}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={() => setSelectedDocId(doc._id)}
+                        style={{ color: "#0070F2", fontWeight: "600", textDecoration: "none", cursor: "pointer" }}
+                      >
+                        {doc.original_filename}
+                      </a>
+                      <a
+                        href={getDocumentDownloadUrl(stage, doc._id)}
+                        aria-label={`Download ${doc.original_filename}`}
+                        style={{ color: "#64748b", display: "inline-flex", alignItems: "center", cursor: "pointer" }}
+                      >
+                        <Download size={12} />
+                      </a>
+                    </div>
+                  </td>
                   <td style={SUB_TD}>{reference}</td>
                   <td style={SUB_TD}>v{doc.version}</td>
                   <td style={SUB_TD}>{formatDate(doc.uploaded_at)}</td>
@@ -444,39 +556,36 @@ function DocumentsPanel({
                   <td style={SUB_TD}>{formatFileSize(doc.file_size)}</td>
                   <td style={{ ...SUB_TD, borderRight: "none" }}>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                      <a href={getDocumentDownloadUrl(stage, doc._id, true)} target="_blank" rel="noreferrer"
-                        onClick={() => setSelectedDocId(doc._id)}
-                        style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #0070F2", color: "#0070F2", borderRadius: "6px", fontSize: "10px", fontWeight: "600", textDecoration: "none", backgroundColor: "#ffffff" }}>
-                        <Eye size={10} /> View
-                      </a>
-                      <button onClick={() => openEditor("approve", doc)}
+                      <button onClick={() => void onReview(reference, doc, "ACCEPTED")}
+                        disabled={busyDocId === doc._id}
                         style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #107E3E", color: "#107E3E", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
+                        <span style={{ color: "#107E3E", fontSize: "11px", fontWeight: "800", lineHeight: 1 }}>✓</span>
                         Approve
                       </button>
                       <button onClick={() => openEditor("reject", doc)}
+                        disabled={busyDocId === doc._id}
                         style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #BB0000", color: "#BB0000", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
+                        <span style={{ color: "#BB0000", fontSize: "11px", fontWeight: "800", lineHeight: 1 }}>X</span>
                         Reject
                       </button>
-                      <button onClick={() => openEditor("comment", doc)}
-                        style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #d9d9d9", color: "#32363a", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
-                        {doc.attachment_comment ? "Edit Comment" : "Add Comment"}
-                      </button>
-                      <a href={getDocumentDownloadUrl(stage, doc._id)}
-                        style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #d9d9d9", color: "#32363a", borderRadius: "6px", fontSize: "10px", fontWeight: "600", textDecoration: "none", backgroundColor: "#ffffff" }}>
-                        <Download size={10} /> Download
-                      </a>
-                      {canModify && (
+                      {mode === "change" ? (
                         <>
-                          <button onClick={() => onReplace(reference, doc._id)}
-                            style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #0070F2", color: "#0070F2", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
-                            <Edit size={10} /> Replace
+                          <button
+                            onClick={() => handleReplaceClick(doc)}
+                            disabled={busyDocId === doc._id}
+                            style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #0070F2", color: "#0070F2", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
+                          >
+                            {busyDocId === doc._id ? "Working..." : "Replace"}
                           </button>
-                          <button onClick={() => void onDelete(doc._id)}
-                            style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #BB0000", color: "#BB0000", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}>
-                            <Trash2 size={10} /> Delete
+                          <button
+                            onClick={() => void handleDeleteClick(doc)}
+                            disabled={busyDocId === doc._id}
+                            style={{ display: "flex", alignItems: "center", gap: "3px", padding: "3px 8px", border: "1px solid #64748b", color: "#64748b", borderRadius: "6px", fontSize: "10px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
+                          >
+                            {busyDocId === doc._id ? "Working..." : "Delete"}
                           </button>
                         </>
-                      )}
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -486,72 +595,107 @@ function DocumentsPanel({
         </div>
       )}
 
-      {activeDoc && (activeDoc.attachment_comment || activeDoc.review_comment || editor) ? (
-        <div style={{ borderTop: "1px solid #dbeafe", backgroundColor: "#fbfdff", padding: "14px 16px", display: "flex", flexDirection: "column", gap: "10px" }}>
+      {activeDoc && activeDoc.review_status === "REJECTED" ? (
+        <div style={{ borderTop: "1px solid #dbeafe", backgroundColor: "#fbfdff", padding: "18px 16px", display: "flex", flexDirection: "column", gap: "12px", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: "11px", fontWeight: "700", color: "#0f172a" }}>Document Notes</div>
-            <div style={{ fontSize: "10px", color: "#64748b", marginTop: "2px" }}>{activeDoc.original_filename}</div>
+            <div style={{ fontSize: "11px", fontWeight: "700", color: "#0f172a", textAlign: "center" }}>Rejected Comment</div>
+            <div style={{ fontSize: "10px", color: "#64748b", marginTop: "2px", textAlign: "center" }}>{activeDoc.original_filename}</div>
           </div>
 
-          {activeDoc.attachment_comment ? (
-            <div style={{ padding: "10px 12px", border: "1px solid #dbeafe", borderRadius: "10px", backgroundColor: "#f8fbff" }}>
-              <div style={{ fontSize: "10px", fontWeight: "700", color: "#1e40af", marginBottom: "4px" }}>Attachment Comment</div>
-              <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap" }}>{activeDoc.attachment_comment}</div>
-            </div>
-          ) : null}
-
-          {activeDoc.review_comment ? (
-            <div style={{ padding: "10px 12px", border: "1px solid #fde68a", borderRadius: "10px", backgroundColor: "#fffdf5" }}>
-              <div style={{ fontSize: "10px", fontWeight: "700", color: "#b45309", marginBottom: "4px" }}>Review Note</div>
-              <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap" }}>{activeDoc.review_comment}</div>
-            </div>
-          ) : null}
-
-          {editor && activeDoc._id === editor.docId ? (
-            <div style={{ padding: "12px", border: "1px solid #cbd5e1", borderRadius: "12px", backgroundColor: "#ffffff", display: "flex", flexDirection: "column", gap: "8px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#0f172a" }}>
-                {editor.mode === "comment"
-                  ? "Add Attachment Comment"
-                  : editor.mode === "approve"
-                    ? "Approve Document"
-                    : "Reject Document"}
-              </div>
-              <textarea
-                value={draftText}
-                onChange={(e) => setDraftText(e.target.value)}
-                rows={3}
-                placeholder={
-                  editor.mode === "comment"
-                    ? "Enter attachment comment"
-                    : editor.mode === "approve"
-                      ? "Enter approval note"
-                      : "Enter rejection reason"
-                }
-                style={{ width: "100%", padding: "9px 11px", border: "1px solid #cbd5e1", borderRadius: "10px", fontSize: "11px", color: "#334155", resize: "vertical", outline: "none" }}
-              />
-              {editor.mode === "reject" && stage === "GRN" ? (
-                <div style={{ fontSize: "10px", color: "#BB0000" }}>A rejection reason is required for GRN documents.</div>
-              ) : null}
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
+          {activeDoc.review_status === "REJECTED" ? (
+            <div style={{ width: "100%", maxWidth: "560px", padding: "12px 14px", border: "1px solid #fde68a", borderRadius: "10px", backgroundColor: "#fffdf5" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+                <div style={{ fontSize: "10px", fontWeight: "700", color: "#b45309" }}>Comment</div>
                 <button
                   type="button"
-                  onClick={closeEditor}
-                  disabled={submitting}
-                  style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+                  onClick={() => openEditor("reject", activeDoc)}
+                  style={{ display: "flex", alignItems: "center", gap: "4px", border: "none", backgroundColor: "transparent", color: "#0070F2", fontSize: "10px", fontWeight: "700", cursor: "pointer" }}
                 >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleSubmit()}
-                  disabled={submitting || (editor.mode === "reject" && stage === "GRN" && !draftText.trim())}
-                  style={{ padding: "7px 14px", borderRadius: "8px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting || (editor.mode === "reject" && stage === "GRN" && !draftText.trim()) ? 0.6 : 1 }}
-                >
-                  {submitting ? "Saving..." : editor.mode === "comment" ? "Save Comment" : editor.mode === "approve" ? "Approve" : "Reject"}
+                  <Edit size={11} />
+                  Edit Comment
                 </button>
               </div>
+              <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap", marginTop: "6px" }}>
+                {activeDoc.attachment_comment || activeDoc.review_comment || "No rejection comment added."}
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeletePromptDocId(activeDoc._id)}
+                style={{ display: "flex", alignItems: "center", gap: "4px", border: "none", backgroundColor: "transparent", color: "#BB0000", fontSize: "10px", fontWeight: "700", cursor: "pointer", marginTop: "10px", marginLeft: "auto" }}
+              >
+                <Trash2 size={11} />
+                Delete Comment
+              </button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {editor && activeDoc && activeDoc._id === editor.docId ? (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(15, 23, 42, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", zIndex: 1000 }}>
+          <div style={{ width: "100%", maxWidth: "480px", backgroundColor: "#ffffff", borderRadius: "16px", border: "1px solid #dbe3ee", boxShadow: "0 20px 40px rgba(15, 23, 42, 0.18)", padding: "18px", display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>Reject Document</div>
+            <div style={{ fontSize: "11px", color: "#64748b" }}>
+              {stage === "GRN" ? "Enter the rejection reason for this document." : "Add or edit the rejection comment for this document."}
+            </div>
+            <textarea
+              value={draftText}
+              onChange={(e) => setDraftText(e.target.value)}
+              rows={4}
+              placeholder="Enter rejection reason"
+              style={{ width: "100%", padding: "9px 11px", border: "1px solid #cbd5e1", borderRadius: "10px", fontSize: "11px", color: "#334155", resize: "vertical", outline: "none" }}
+            />
+            {stage === "GRN" && !draftText.trim() ? (
+              <div style={{ fontSize: "10px", color: "#BB0000" }}>A rejection reason is required for GRN documents.</div>
+            ) : null}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={closeEditor}
+                disabled={submitting}
+                style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSubmit()}
+                disabled={submitting || (stage === "GRN" && !draftText.trim())}
+                style={{ padding: "7px 14px", borderRadius: "8px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting || (stage === "GRN" && !draftText.trim()) ? 0.6 : 1 }}
+              >
+                {submitting ? "Saving..." : "Reject"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deletePromptDocId && activeDoc && activeDoc._id === deletePromptDocId ? (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(15, 23, 42, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", zIndex: 1000 }}>
+          <div style={{ width: "100%", maxWidth: "480px", backgroundColor: "#ffffff", borderRadius: "16px", border: "1px solid #dbe3ee", boxShadow: "0 20px 40px rgba(15, 23, 42, 0.18)", padding: "18px", display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>Delete Comment</div>
+            <div style={{ fontSize: "11px", color: "#64748b" }}>
+              Do you really want to delete this message?
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={closeDeletePrompt}
+                disabled={submitting}
+                style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteComment()}
+                disabled={submitting}
+                style={{ padding: "7px 14px", borderRadius: "8px", border: "none", backgroundColor: "#BB0000", color: "#ffffff", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+              >
+                {submitting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>
@@ -609,16 +753,16 @@ function UploadPanel({
 // ─── Full expanded content ──────────────────────────────────────────────────────
 
 function ExpandedRowContent({
-  record, stage, stageKey, docs, docsLoading, subTab, multiUpload, uploading, onUpload, onReplace, onDelete, onReview, onComment,
+  record, stage, stageKey, docs, docsLoading, subTab, multiUpload, uploading, onUpload, onReview, onComment, onReplace, onDelete,
 }: {
   record: ProcurementRecord; stage: Exclude<FrontendStageKey, "INV">; stageKey: StageKey;
   docs: StageDocument[]; docsLoading: boolean; subTab: "upload" | "change" | "view";
   multiUpload: boolean; uploading: boolean;
   onUpload: (ref: string, files: File[]) => Promise<void>;
-  onReplace: (ref: string, docId: string) => void;
-  onDelete: (docId: string) => Promise<void>;
   onReview: (ref: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
   onComment: (ref: string, doc: StageDocument) => Promise<void>;
+  onReplace: (ref: string, doc: StageDocument, file: File) => Promise<void>;
+  onDelete: (ref: string, doc: StageDocument) => Promise<void>;
 }) {
   const reference = getReference(record);
 
@@ -638,9 +782,9 @@ function ExpandedRowContent({
       {/* Documents panel (view & change) */}
       {(subTab === "view" || subTab === "change") && (
         <DocumentsPanel
-          reference={reference} stage={stageKey} docs={docs} docsLoading={docsLoading}
-          canModify={subTab === "change"} onReplace={onReplace} onDelete={onDelete}
+          reference={reference} stage={stageKey} docs={docs} docsLoading={docsLoading} mode={subTab}
           onReview={onReview} onComment={onComment}
+          onReplace={onReplace} onDelete={onDelete}
         />
       )}
 
@@ -660,8 +804,7 @@ function ExpandedRowContent({
 function RecordsTable({
   stage, stageKey, records, config, expandedReferences, selectedReference,
   documentsByReference, loadingReferences, subTab, uploading,
-  onRowClick, onUpload, onReplace, onDelete,
-  onReview, onComment,
+  onRowClick, onUpload, onReview, onComment, onReplace, onDelete,
 }: {
   stage: Exclude<FrontendStageKey, "INV">; stageKey: StageKey;
   records: ProcurementRecord[]; config: StageModuleConfig;
@@ -670,10 +813,10 @@ function RecordsTable({
   subTab: "upload" | "change" | "view"; uploading: boolean;
   onRowClick: (ref: string) => void;
   onUpload: (ref: string, files: File[]) => Promise<void>;
-  onReplace: (ref: string, docId: string) => void;
-  onDelete: (docId: string) => Promise<void>;
   onReview: (ref: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED") => Promise<void>;
   onComment: (ref: string, doc: StageDocument) => Promise<void>;
+  onReplace: (ref: string, doc: StageDocument, file: File) => Promise<void>;
+  onDelete: (ref: string, doc: StageDocument) => Promise<void>;
 }) {
   const headers = getHeaders(stage);
 
@@ -733,8 +876,8 @@ function RecordsTable({
                           record={record} stage={stage} stageKey={stageKey}
                           docs={docs} docsLoading={docsLoading} subTab={subTab}
                           multiUpload={config.multiUpload} uploading={uploading}
-                          onUpload={onUpload} onReplace={onReplace} onDelete={onDelete}
-                          onReview={onReview} onComment={onComment}
+                          onUpload={onUpload}
+                          onReview={onReview} onComment={onComment} onReplace={onReplace} onDelete={onDelete}
                         />
                       </td>
                     </tr>
@@ -754,13 +897,13 @@ function RecordsTable({
 export function ProcurementStageModule({ config }: { config: StageModuleConfig }) {
   const stage = getStageFromFrontend(config.frontendStage);
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const initialDocNumber = searchParams.get("doc") ?? "";
   const initialAction = (searchParams.get("action") as "upload" | "change" | "view" | null) ?? "upload";
+  const initialFilters = filtersFromSearchParams(config.frontendStage, searchParams);
 
-  const [filters, setFilters] = useState<FilterValues>(createEmptyFilterValues({ docNumber: initialDocNumber }));
-  const [hasSearched, setHasSearched] = useState(Boolean(initialDocNumber));
+  const [filters, setFilters] = useState<FilterValues>(initialFilters);
+  const [hasSearched, setHasSearched] = useState(getStageFilterKeys(config.frontendStage).some((key) => initialFilters[key] !== ""));
   const [subTab, setSubTab] = useState<"upload" | "change" | "view">(initialAction);
 
   const [valueHelpItems, setValueHelpItems] = useState<ValueHelpItem[]>([]);
@@ -775,9 +918,6 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
   const [error, setError] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [lastValidation, setLastValidation] = useState<{ ocr_status: string; ocr_rejection_detail?: StageDocument["ocr_rejection_detail"] } | null>(null);
-
-  const replaceInputRef = useRef<HTMLInputElement>(null);
-  const replaceTargetRef = useRef<{ referenceNumber: string; documentId: string } | null>(null);
 
   // ── Load summaries on mount ────────────────────────────────────────────────
   const loadSummaries = async () => {
@@ -798,18 +938,14 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
 
   // ── Sync URL params ────────────────────────────────────────────────────────
   useEffect(() => {
-    const nextDoc = searchParams.get("doc") ?? "";
     const nextAction = (searchParams.get("action") as "upload" | "change" | "view" | null) ?? "upload";
-    setFilters(createEmptyFilterValues({ docNumber: nextDoc }));
+    const nextFilters = filtersFromSearchParams(config.frontendStage, searchParams);
+    setFilters(nextFilters);
     setSubTab(nextAction);
-    setHasSearched(Boolean(nextDoc));
+    setHasSearched(getStageFilterKeys(config.frontendStage).some((key) => nextFilters[key] !== ""));
     setExpandedReferences([]);
     setSelectedReference("");
-
-    if (nextDoc) {
-      navigate(`/documents/${config.frontendStage.toLowerCase()}/${encodeURIComponent(nextDoc)}?action=${nextAction}`, { replace: true });
-    }
-  }, [config.frontendStage, navigate, searchParams]);
+  }, [config.frontendStage, searchParams]);
 
   // ── Fetch docs on demand ───────────────────────────────────────────────────
   const fetchDocs = async (ref: string, force = false) => {
@@ -828,7 +964,8 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
 
   // ── Row click → navigate to standalone detail page ─────────────────────────
   const handleRowClick = (ref: string) => {
-    navigate(`/documents/${config.frontendStage.toLowerCase()}/${encodeURIComponent(ref)}?action=${subTab}`);
+    const params = buildListSearchParams(config.frontendStage, subTab, filters);
+    navigate(`/documents/${config.frontendStage.toLowerCase()}/${encodeURIComponent(ref)}?${params.toString()}`);
   };
 
   // ── Filters ────────────────────────────────────────────────────────────────
@@ -844,6 +981,7 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
     setHasSearched(true);
     setExpandedReferences([]);
     setSelectedReference("");
+    setSearchParams(buildListSearchParams(config.frontendStage, subTab, next), { replace: true });
   };
 
   // ── Upload (inline expanded rows still work) ───────────────────────────────
@@ -856,7 +994,7 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
       const result = await uploadDocuments(stage, ref, files);
       if (stage === "PR") {
         const typed = result as Awaited<ReturnType<typeof uploadDocuments>> & { uploaded?: Array<{ ocr_status: string; ocr_rejection_detail?: StageDocument["ocr_rejection_detail"] }>; uploaded_count?: number };
-        setLastValidation(typed.uploaded?.[0] ? { ocr_status: typed.uploaded[0].ocr_status, ocr_rejection_detail: typed.uploaded[0].ocr_rejection_detail } : null);
+        setLastValidation(null);
         setInfoMessage(`${typed.uploaded_count ?? 0} document(s) uploaded successfully.`);
       } else {
         const typed = result as StageDocument;
@@ -868,45 +1006,6 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
       setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
       setUploading(false);
-    }
-  };
-
-  // ── Replace ────────────────────────────────────────────────────────────────
-  const handleReplace = (ref: string, docId: string) => {
-    replaceTargetRef.current = { referenceNumber: ref, documentId: docId };
-    replaceInputRef.current?.click();
-  };
-
-  const onReplaceFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    const target = replaceTargetRef.current;
-    if (!file || !target) return;
-    setUploading(true);
-    setError(null);
-    try {
-      const updated = await replaceDocument(stage, target.referenceNumber, target.documentId, file);
-      setLastValidation({ ocr_status: updated.ocr_status, ocr_rejection_detail: updated.ocr_rejection_detail });
-      setInfoMessage("Document replaced successfully.");
-      await fetchDocs(target.referenceNumber, true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Replacement failed.");
-    } finally {
-      setUploading(false);
-      e.target.value = "";
-      replaceTargetRef.current = null;
-    }
-  };
-
-  // ── Delete ─────────────────────────────────────────────────────────────────
-  const handleDelete = async (docId: string) => {
-    if (!window.confirm("Delete this document?")) return;
-    setError(null);
-    try {
-      await deleteDocument(stage, docId);
-      setInfoMessage("Document deleted.");
-      await Promise.all(expandedReferences.map((ref) => fetchDocs(ref, true)));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Delete failed.");
     }
   };
 
@@ -945,6 +1044,34 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
     }
   };
 
+  const handleReplace = async (ref: string, doc: StageDocument, file: File) => {
+    setError(null);
+    try {
+      const updated = await replaceDocument(stage, ref, doc._id, file);
+      setDocumentsByReference((prev) => ({
+        ...prev,
+        [ref]: (prev[ref] || []).map((item) => (item._id === doc._id ? updated : item)),
+      }));
+      setInfoMessage(`${config.title} document replaced successfully.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to replace document.");
+    }
+  };
+
+  const handleDelete = async (ref: string, doc: StageDocument) => {
+    setError(null);
+    try {
+      await deleteDocument(stage, doc._id);
+      setDocumentsByReference((prev) => ({
+        ...prev,
+        [ref]: (prev[ref] || []).filter((item) => item._id !== doc._id),
+      }));
+      setInfoMessage(`${config.title} document deleted successfully.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete document.");
+    }
+  };
+
   // ── Render ─────────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -959,6 +1086,7 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <FilterBar
         docType={config.frontendStage}
+        actionLabel={subTab === "upload" ? config.uploadLabel : subTab === "change" ? config.changeLabel : config.viewLabel}
         onSearch={applyFilters}
         valueHelpItems={valueHelpItems}
         values={filters}
@@ -987,22 +1115,18 @@ export function ProcurementStageModule({ config }: { config: StageModuleConfig }
               uploading={uploading}
               onRowClick={handleRowClick}
               onUpload={handleUpload}
-              onReplace={handleReplace}
-              onDelete={handleDelete}
               onReview={handleReview}
               onComment={handleComment}
+              onReplace={handleReplace}
+              onDelete={handleDelete}
             />
           )}
         </div>
       </div>
-
-      <input ref={replaceInputRef} type="file" style={{ display: "none" }} onChange={(e) => void onReplaceFileSelected(e)} />
-
       <ModuleFooterAlerts
         error={error}
         infoMessage={infoMessage}
         validation={lastValidation}
-        idleMessage={`Use Go to load ${config.frontendStage} records, then click any row to open its detail page.`}
       />
     </div>
   );

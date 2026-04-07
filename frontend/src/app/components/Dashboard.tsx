@@ -150,7 +150,7 @@ export function Dashboard() {
 
         {/* ── KPI cards ─────────────────────────────────────────────── */}
         {summary && (
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {[
               { label: "Total PR Documents", value: summary.document_upload_status.PR.with_docs, sub: `${summary.document_upload_status.PR.missing} not uploaded`, icon: FileText, color: "#0070F2", bg: "#E8F1FB" },
               { label: "Total PO Documents", value: summary.document_upload_status.PO.with_docs, sub: `${summary.document_upload_status.PO.missing} not uploaded`, icon: ShoppingCart, color: "#107E3E", bg: "#EEF5EC" },
@@ -181,7 +181,7 @@ export function Dashboard() {
         )}
 
         {/* ── Tables ────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {/* Document summary */}
           <div className="border overflow-hidden" style={{ backgroundColor: "#ffffff", borderColor: "#d9d9d9", borderRadius: "18px" }}>
             <div className="px-4 py-2 border-b flex items-center justify-between" style={{ borderColor: "#d9d9d9", backgroundColor: "#f5f5f5" }}>
@@ -246,7 +246,7 @@ export function Dashboard() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           <div className="border overflow-hidden" style={{ backgroundColor: "#ffffff", borderColor: "#d9d9d9", borderRadius: "18px" }}>
             <div className="px-4 py-2 border-b flex items-center justify-between" style={{ borderColor: "#d9d9d9", backgroundColor: "#f5f5f5" }}>
               <span style={{ fontSize: "13px", fontWeight: "600", color: "#32363a" }}>Approval Summary</span>

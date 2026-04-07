@@ -76,12 +76,10 @@ export function ModuleFooterAlerts({
   error,
   infoMessage,
   validation,
-  idleMessage,
 }: {
   error?: string | null;
   infoMessage?: string | null;
   validation?: ValidationState;
-  idleMessage: string;
 }) {
   const alerts: FooterAlert[] = [];
   const isOcrValidationError = Boolean(error && error.toLowerCase().includes("ocr validation"));
@@ -111,11 +109,7 @@ export function ModuleFooterAlerts({
     <div className="border-t px-4 py-3 flex-shrink-0" style={{ backgroundColor: "#ffffff", borderColor: "#d9d9d9" }}>
       <div className="flex items-center gap-2 mb-2" style={{ fontSize: "11px", fontWeight: "600", color: "#32363a" }}>
       </div>
-      {alerts.length === 0 ? (
-        <div className="border px-3 py-2" style={{ borderColor: "#d9d9d9", backgroundColor: "#f7f7f7", borderRadius: "2px", fontSize: "12px", color: "#6A6D70" }}>
-          {idleMessage}
-        </div>
-      ) : (
+      {alerts.length === 0 ? null : (
         <div className="flex flex-wrap gap-3">
           {alerts.map((alert) => {
             const tone = toneStyles(alert.tone);

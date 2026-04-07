@@ -232,7 +232,7 @@ def upload_pr_document(pr_number):
         seen_hashes[h] = f.filename
 
         try:
-            doc = save_document(f, "PR", pr_number)
+            doc = save_document(f, "PR", pr_number, enable_ocr=False)
             uploaded.append({
                 "document_id":          doc["_id"],
                 "original_filename":    doc["original_filename"],

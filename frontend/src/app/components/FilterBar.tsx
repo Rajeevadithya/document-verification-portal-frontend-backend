@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, ChevronDown, HelpCircle, Search, X } from "lucide-react";
+import { CalendarDays, ChevronDown, ChevronUp, HelpCircle, Search, X } from "lucide-react";
 import { ValueHelpDialog } from "./ValueHelpDialog";
 import type { FrontendStageKey, ValueHelpItem } from "../lib/types";
 
@@ -10,6 +10,7 @@ type FilterBarProps = {
   valueHelpSources?: Partial<Record<keyof FilterValues, ValueHelpItem[]>>;
   values?: Partial<FilterValues>;
   fieldOptions?: Partial<Record<keyof FilterValues, string[]>>;
+  actionLabel?: string;
 };
 
 export type FilterValues = {
@@ -87,32 +88,25 @@ const FIELD_LAYOUTS: Record<FrontendStageKey, FilterFieldConfig[]> = {
   PO: [
     { key: "search", label: "Search", type: "search", placeholder: "Search", width: "220px" },
     { key: "editingStatus", label: "Editing Status", type: "select", width: "220px" },
-    { key: "supplier", label: "Supplier", type: "text", width: "220px" },
     { key: "purchaseOrder", label: "Purchase Order", type: "valueHelp", width: "220px" },
-    { key: "purchasingGroup", label: "Purchasing Group", type: "text", width: "220px" },
-    { key: "companyCode", label: "Company Code", type: "text", width: "220px" },
-    { key: "status", label: "Status", type: "select", width: "220px" },
     { key: "material", label: "Material", type: "text", width: "220px" },
     { key: "plant", label: "Plant", type: "text", width: "220px" },
-    { key: "purchaseOrderDate", label: "Purchase Order Date", type: "date", width: "220px" },
+    { key: "companyCode", label: "Company Code", type: "text", width: "220px" },
+    { key: "purchasingGroup", label: "Purchasing Group", type: "text", width: "220px" },
   ],
   GRN: [
-    { key: "stockChange", label: "Stock Change", type: "select", width: "220px" },
-    { key: "plant", label: "Plant", type: "text", width: "220px" },
-    { key: "storageLocation", label: "Storage Location", type: "text", width: "220px" },
-    { key: "stockType", label: "Stock Type", type: "text", width: "220px" },
+    { key: "search", label: "Search", type: "search", placeholder: "Search", width: "220px" },
+    { key: "editingStatus", label: "Editing Status", type: "select", width: "220px" },
     { key: "materialDocument", label: "Material Document", type: "valueHelp", width: "220px" },
     { key: "materialDocumentYear", label: "Material Document Year", type: "text", width: "220px" },
     { key: "material", label: "Material", type: "text", width: "220px" },
-    { key: "postingDate", label: "Posting Date", type: "date", width: "220px" },
-    { key: "documentDate", label: "Document Date", type: "date", width: "220px" },
+    { key: "plant", label: "Plant", type: "text", width: "220px" },
   ],
   INV: [
     { key: "search", label: "Search", type: "search", placeholder: "Search", width: "220px" },
-    { key: "docNumber", label: "Invoice Number", type: "valueHelp", width: "220px" },
-    { key: "prNumber", label: "PR Number", type: "valueHelp", width: "220px" },
-    { key: "poNumber", label: "PO Number", type: "valueHelp", width: "220px" },
     { key: "grnNumber", label: "GRN Number", type: "valueHelp", width: "220px" },
+    { key: "poNumber", label: "PO Number", type: "valueHelp", width: "220px" },
+    { key: "prNumber", label: "PR Number", type: "valueHelp", width: "220px" },
   ],
 };
 
@@ -138,13 +132,13 @@ function FieldInput({
   onValueHelp: (key: keyof FilterValues) => void;
 }) {
   const baseStyle = {
-    fontSize: "12px",
+    fontSize: "11px",
     borderColor: "#cbd5e1",
     color: "#334155",
     backgroundColor: "#ffffff",
-    height: "40px",
-    width: field.width ?? "220px",
-    borderRadius: "8px",
+    height: "36px",
+    width: "100%",
+    borderRadius: "7px",
   } as const;
 
   if (field.type === "select") {
@@ -182,7 +176,7 @@ function FieldInput({
           type="button"
           onClick={() => onValueHelp(field.key)}
           className="border flex items-center justify-center hover:bg-slate-50"
-          style={{ width: "40px", height: "40px", borderColor: "#cbd5e1", backgroundColor: "#ffffff", borderRadius: "0 8px 8px 0" }}
+          style={{ width: "36px", height: "36px", borderColor: "#cbd5e1", backgroundColor: "#ffffff", borderRadius: "0 7px 7px 0", cursor: "pointer" }}
         >
           <HelpCircle size={16} color="#1d4ed8" />
         </button>
@@ -232,9 +226,10 @@ function FieldInput({
   );
 }
 
-export function FilterBar({ docType, onSearch, valueHelpItems, valueHelpSources = {}, values, fieldOptions = {} }: FilterBarProps) {
+export function FilterBar({ docType, onSearch, valueHelpItems, valueHelpSources = {}, values, fieldOptions = {}, actionLabel }: FilterBarProps) {
   const [draft, setDraft] = useState<FilterValues>(createEmptyFilterValues(values));
   const [activeVhField, setActiveVhField] = useState<keyof FilterValues | null>(null);
+  const [filtersExpanded, setFiltersExpanded] = useState(true);
 
   useEffect(() => {
     setDraft(createEmptyFilterValues(values));
@@ -246,6 +241,7 @@ export function FilterBar({ docType, onSearch, valueHelpItems, valueHelpSources 
   const isDirty = hasAnyFilter(draft);
   const activeVhItems = activeVhField ? valueHelpSources[activeVhField] ?? valueHelpItems : valueHelpItems;
   const activeVhTitle = activeVhField ? fields.find((field) => field.key === activeVhField)?.label ?? title : title;
+  const activeFilterCount = Object.values(draft).filter((value) => value !== "").length;
 
   const handleClearFilters = () => {
     const cleared = createEmptyFilterValues();
@@ -256,65 +252,110 @@ export function FilterBar({ docType, onSearch, valueHelpItems, valueHelpSources 
   return (
     <>
       <div
-        className="px-6 py-5 border-b"
+        className="px-4 py-3 border-b"
         style={{ backgroundColor: "#ffffff", borderColor: "#e2e8f0", boxShadow: "0 1px 0 rgba(15, 23, 42, 0.04)" }}
       >
-        <div className="flex items-center justify-between mb-5">
-          <div style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Standard</div>
-          <div style={{ fontSize: "12px", color: "#2563eb", fontWeight: "600" }}>{title}</div>
-        </div>
-
-        <div className="flex items-end gap-x-6 gap-y-4 flex-wrap">
-          {fields.map((field) => (
-            <div key={field.key} className="flex flex-col gap-1" style={{ minWidth: field.width }}>
-              <label style={{ fontSize: "11px", color: "#64748b", fontWeight: "600" }}>{field.label}</label>
-              <FieldInput
-                field={field}
-                value={draft[field.key]}
-                onChange={(nextValue) => setDraft((current) => ({ ...current, [field.key]: nextValue }))}
-                options={
-                  field.key === "docNumber" || field.key === "purchaseOrder" || field.key === "materialDocument" || field.key === "prNumber" || field.key === "poNumber" || field.key === "grnNumber"
-                    ? availableDocNumbers
-                    : fieldOptions[field.key] ?? []
-                }
-                onValueHelp={(key) => setActiveVhField(key)}
-              />
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a", lineHeight: 1.1 }}>Standard</div>
+            <div style={{ fontSize: "11px", color: "#2563eb", fontWeight: "600", marginTop: "2px", lineHeight: 1.2 }}>
+              {title}
+              {actionLabel ? ` - ${actionLabel}` : ""}
             </div>
-          ))}
-
-          <div className="flex items-center gap-4 ml-auto">
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "600" }}>
+              {activeFilterCount > 0 ? `${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}` : "No filters applied"}
+            </div>
             <button
               type="button"
-              onClick={() => onSearch(draft)}
-              className="px-4 py-2"
+              onClick={() => setFiltersExpanded((current) => !current)}
+              className="flex items-center gap-2"
               style={{
-                fontSize: "12px",
-                backgroundColor: "#1d4ed8",
-                color: "#ffffff",
-                borderRadius: "12px",
-                minWidth: "56px",
-                height: "40px",
+                fontSize: "11px",
                 fontWeight: "700",
+                color: "#334155",
+                backgroundColor: "#f8fafc",
+                border: "1px solid #dbe3ee",
+                borderRadius: "9px",
+                padding: "6px 10px",
+                cursor: "pointer",
               }}
             >
-              Go
+              {filtersExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+              {filtersExpanded ? "Hide Filters" : "Show Filters"}
             </button>
-
-            {isDirty ? (
-              <button
-                type="button"
-                onClick={handleClearFilters}
-                className="flex items-center gap-1 text-left"
-                style={{ fontSize: "12px", color: "#BB0000", fontWeight: "600" }}
-              >
-                <X size={13} />
-                Clear Filters
-              </button>
-            ) : (
-              <span style={{ fontSize: "12px", color: "#94a3b8", fontWeight: "500" }}>Clear Filters</span>
-            )}
           </div>
         </div>
+
+        {filtersExpanded ? (
+          <div className="flex flex-col gap-3" style={{ marginTop: "10px" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+                gap: "10px 14px",
+                alignItems: "end",
+              }}
+            >
+              {fields.map((field) => (
+                <div
+                  key={field.key}
+                  className="flex flex-col gap-1"
+                  style={{ minWidth: `min(100%, ${field.width ?? "220px"})` }}
+                >
+                  <label style={{ fontSize: "10px", color: "#64748b", fontWeight: "600", lineHeight: 1.1 }}>{field.label}</label>
+                  <FieldInput
+                    field={field}
+                    value={draft[field.key]}
+                    onChange={(nextValue) => setDraft((current) => ({ ...current, [field.key]: nextValue }))}
+                    options={
+                      field.key === "docNumber" || field.key === "purchaseOrder" || field.key === "materialDocument" || field.key === "prNumber" || field.key === "poNumber" || field.key === "grnNumber"
+                        ? availableDocNumbers
+                        : fieldOptions[field.key] ?? []
+                    }
+                    onValueHelp={(key) => setActiveVhField(key)}
+                  />
+                </div>
+              ))}
+              <div className="flex flex-col justify-end" style={{ gridColumn: "-2 / -1" }}>
+                <div className="flex items-center justify-end gap-2 flex-wrap" style={{ minHeight: "36px" }}>
+                  <button
+                    type="button"
+                    onClick={() => onSearch(draft)}
+                    className="px-4 py-2"
+                    style={{
+                      fontSize: "11px",
+                      backgroundColor: "#1d4ed8",
+                      color: "#ffffff",
+                      borderRadius: "10px",
+                      minWidth: "52px",
+                      height: "36px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Go
+                  </button>
+
+                  {isDirty ? (
+                    <button
+                      type="button"
+                      onClick={handleClearFilters}
+                      className="flex items-center gap-1 text-left"
+                      style={{ fontSize: "11px", color: "#BB0000", fontWeight: "600", cursor: "pointer", height: "36px" }}
+                    >
+                      <X size={13} />
+                      Clear Filters
+                    </button>
+                  ) : (
+                    <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: "500" }}>Clear Filters</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {activeVhField && (

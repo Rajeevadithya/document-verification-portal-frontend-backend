@@ -104,7 +104,7 @@ def _should_block_for_ocr(stage: str, ocr_result: dict) -> bool:
         detected_stage = (ocr_result.get("document_type_detected") or "").upper()
         return ocr_result.get("grn_reference_found") or (detected_stage not in {"", "PO"} and detected_stage is not None)
     if stage_upper == "GRN":
-        return ocr_status != "VALID"
+        return ocr_status == "INVALID"
     if stage_upper == "PR":
         return ocr_status not in {"VALID", "PENDING"}
     return False
@@ -135,11 +135,12 @@ def _create_notification(notification_type: str, stage: str, reference_number: s
 
 def save_document(file_obj, stage: str, reference_number: str,
                   linked_pr_number: str = None,
-                  uploaded_by: str = None) -> dict:
+                  uploaded_by: str = None,
+                  enable_ocr: bool = True) -> dict:
     """
     Save file to disk and create a document record in MongoDB.
     - Rejects exact duplicates (same file content already active for this PR/stage).
-    - Triggers OCR validation automatically.
+    - Triggers OCR validation automatically unless disabled.
     - Writes an audit log entry with who uploaded, when, and all saved details.
     Returns the created document dict.
     Raises ValueError if the file is a duplicate.
@@ -166,24 +167,31 @@ def save_document(file_obj, stage: str, reference_number: str,
     file_size = os.path.getsize(full_path)
     mime = _guess_mime(original_filename)
 
-    # Run OCR
-    ocr_result = validate_document(full_path, stage, reference_number, linked_pr_number)
-
-    # Build detailed OCR rejection explanation when status is not VALID
     ocr_rejection_detail = None
-    if ocr_result["ocr_status"] in ("INVALID", "REVIEW"):
-        ocr_rejection_detail = build_rejection_explanation(ocr_result, stage, reference_number)
+    if enable_ocr:
+        ocr_result = validate_document(full_path, stage, reference_number, linked_pr_number)
 
-    if _should_block_for_ocr(stage, ocr_result):
-        try:
-            if os.path.exists(full_path):
-                os.remove(full_path)
-        finally:
-            raise OCRValidationError(
-                _build_ocr_failure_message(stage, reference_number, ocr_rejection_detail, ocr_result),
-                ocr_result=ocr_result,
-                ocr_rejection_detail=ocr_rejection_detail,
-            )
+        # Build detailed OCR rejection explanation when status is not VALID
+        if ocr_result["ocr_status"] in ("INVALID", "REVIEW"):
+            ocr_rejection_detail = build_rejection_explanation(ocr_result, stage, reference_number)
+
+        if _should_block_for_ocr(stage, ocr_result):
+            try:
+                if os.path.exists(full_path):
+                    os.remove(full_path)
+            finally:
+                raise OCRValidationError(
+                    _build_ocr_failure_message(stage, reference_number, ocr_rejection_detail, ocr_result),
+                    ocr_result=ocr_result,
+                    ocr_rejection_detail=ocr_rejection_detail,
+                )
+    else:
+        ocr_result = {
+            "ocr_status": "VALID",
+            "confidence": None,
+            "issues": [],
+            "skipped": True,
+        }
 
     # Resolve uploader identity (explicit arg > form field > header > fallback)
     uploader = uploaded_by or _resolve_uploader()
@@ -243,7 +251,7 @@ def save_document(file_obj, stage: str, reference_number: str,
     )
 
     # Auto-create notification if OCR fails
-    if ocr_result["ocr_status"] in ("INVALID", "REVIEW"):
+    if enable_ocr and ocr_result["ocr_status"] in ("INVALID", "REVIEW"):
         _create_ocr_notification(stage, reference_number, ocr_result)
 
     return doc

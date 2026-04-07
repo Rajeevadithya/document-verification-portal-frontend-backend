@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Download, Edit, Eye, Link2, LoaderCircle, Paperclip } from "lucide-react";
+import { ChevronDown, ChevronUp, Download, Edit, LoaderCircle, Paperclip, Trash2 } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { FilterBar, createEmptyFilterValues, type FilterValues } from "../FilterBar";
-import { commentDocument, getDocumentDownloadUrl, getStageRecord, listDocuments, listStageRecords, listValueHelp, replaceDocument, reviewDocument, uploadDocuments } from "../../lib/api";
-import { formatCurrency, formatDate, formatFileSize } from "../../lib/format";
+import { commentDocument, getDocumentDownloadUrl, getStageRecord, listDocuments, listStageRecords, listValueHelp, reviewDocument } from "../../lib/api";
+import { formatCurrency, formatDate } from "../../lib/format";
 import { ModuleFooterAlerts, SelectionPlaceholder } from "./ModuleExperience";
 import type {
   GRNRecord,
@@ -88,7 +88,21 @@ function statusBadge(status: string, synthetic = false) {
   );
 }
 
-function SectionTable({ title, badge, children }: { title: string; badge?: string; children: ReactNode }) {
+function SectionTable({
+  title,
+  badge,
+  children,
+  collapsible = false,
+  collapsed = false,
+  onToggle,
+}: {
+  title: string;
+  badge?: string;
+  children: ReactNode;
+  collapsible?: boolean;
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   return (
     <div
       style={{
@@ -111,9 +125,33 @@ function SectionTable({ title, badge, children }: { title: string; badge?: strin
         }}
       >
         <span style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>{title}</span>
-        {badge ? <span style={{ fontSize: "12px", color: "#64748b", fontWeight: "500" }}>{badge}</span> : null}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+          {badge ? <span style={{ fontSize: "12px", color: "#64748b", fontWeight: "500" }}>{badge}</span> : null}
+          {collapsible ? (
+            <button
+              type="button"
+              onClick={onToggle}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                border: "1px solid #dbe3ee",
+                backgroundColor: "#ffffff",
+                color: "#334155",
+                borderRadius: "10px",
+                padding: "6px 10px",
+                fontSize: "11px",
+                fontWeight: "700",
+                cursor: "pointer",
+              }}
+            >
+              {collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+              {collapsed ? "Show Table" : "Hide Table"}
+            </button>
+          ) : null}
+        </div>
       </div>
-      {children}
+      {collapsed ? null : children}
     </div>
   );
 }
@@ -136,7 +174,8 @@ function AttachmentSubCard({
   onComment: (stage: "PR" | "PO" | "GRN", reference: string, doc: StageDocument, comment?: string) => Promise<void>;
 }) {
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
-  const [editor, setEditor] = useState<{ mode: "comment" | "approve" | "reject"; docId: string } | null>(null);
+  const [editor, setEditor] = useState<{ mode: "reject"; docId: string } | null>(null);
+  const [deletePromptDocId, setDeletePromptDocId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const activeDoc = docs.find((doc) => doc._id === selectedDocId) || docs[0] || null;
@@ -148,10 +187,10 @@ function AttachmentSubCard({
     });
   }, [docs]);
 
-  const openEditor = (mode: "comment" | "approve" | "reject", doc: StageDocument) => {
+  const openEditor = (mode: "reject", doc: StageDocument) => {
     setSelectedDocId(doc._id);
     setEditor({ mode, docId: doc._id });
-    setDraftText(mode === "comment" ? doc.attachment_comment || "" : doc.review_comment || "");
+    setDraftText(doc.review_status === "REJECTED" ? doc.attachment_comment || doc.review_comment || "" : "");
   };
 
   const closeEditor = () => {
@@ -159,20 +198,32 @@ function AttachmentSubCard({
     setDraftText("");
   };
 
+  const closeDeletePrompt = () => {
+    setDeletePromptDocId(null);
+  };
+
+  const handleDeleteComment = async () => {
+    if (!activeDoc || deletePromptDocId !== activeDoc._id) return;
+    setSubmitting(true);
+    try {
+      await onComment(stage as "PR" | "PO" | "GRN", reference, activeDoc, undefined);
+      closeDeletePrompt();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!editor) return;
     const doc = docs.find((item) => item._id === editor.docId);
     if (!doc) return;
     const cleanText = draftText.trim();
-    if (editor.mode === "reject" && stage === "GRN" && !cleanText) return;
+    if (stage === "GRN" && !cleanText) return;
 
     setSubmitting(true);
     try {
-      if (editor.mode === "comment") {
-        await onComment(stage as "PR" | "PO" | "GRN", reference, doc, cleanText || undefined);
-      } else {
-        await onReview(stage as "PR" | "PO" | "GRN", reference, doc, editor.mode === "approve" ? "ACCEPTED" : "REJECTED", cleanText || undefined);
-      }
+      await onComment(stage as "PR" | "PO" | "GRN", reference, doc, cleanText || undefined);
+      await onReview(stage as "PR" | "PO" | "GRN", reference, doc, "REJECTED");
       closeEditor();
     } finally {
       setSubmitting(false);
@@ -216,10 +267,10 @@ function AttachmentSubCard({
         <div style={{ padding: "16px", fontSize: "12px", color: "#94a3b8" }}>No attachments uploaded for this record.</div>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table style={{ borderCollapse: "collapse", width: "100%", minWidth: "760px" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", minWidth: "860px" }}>
             <thead>
               <tr>
-                {["File Name", "Version", "Uploaded", "Decision", "Actions"].map((header, index, arr) => (
+                {["File Name", "Reference", "Version", "Upload Date", "Decision", "Actions"].map((header, index, arr) => (
                   <th
                     key={header}
                     style={{ ...TH_STYLE, fontSize: "11px", backgroundColor: "#f8fbff", borderRight: index === arr.length - 1 ? "none" : TH_STYLE.borderRight }}
@@ -232,51 +283,46 @@ function AttachmentSubCard({
             <tbody>
               {docs.map((doc, index) => (
                 <tr key={doc._id} style={{ backgroundColor: index % 2 === 0 ? "#ffffff" : "#fafcff" }}>
-                  <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "600" }}>{doc.original_filename}</td>
-                  <td style={TD_STYLE}>v{doc.version}</td>
-                  <td style={TD_STYLE}>{formatDate(doc.uploaded_at)}</td>
-                  <td style={TD_STYLE}>{doc.review_status}</td>
-                  <td style={{ ...TD_STYLE, borderRight: "none" }}>
-                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <td style={{ ...TD_STYLE, minWidth: "240px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                       <a
                         href={getDocumentDownloadUrl(stage, doc._id, true)}
                         target="_blank"
                         rel="noreferrer"
                         onClick={() => setSelectedDocId(doc._id)}
-                        style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #0070F2", color: "#0070F2", borderRadius: "7px", textDecoration: "none", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff" }}
+                        style={{ color: "#0070F2", fontWeight: "600", textDecoration: "none", cursor: "pointer" }}
                       >
-                        <Eye size={11} />
-                        View
+                        {doc.original_filename}
                       </a>
                       <a
                         href={getDocumentDownloadUrl(stage, doc._id)}
-                        style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #d9d9d9", color: "#475569", borderRadius: "7px", textDecoration: "none", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff" }}
+                        aria-label={`Download ${doc.original_filename}`}
+                        style={{ color: "#64748b", display: "inline-flex", alignItems: "center", cursor: "pointer" }}
                       >
-                        <Download size={11} />
-                        Download
+                        <Download size={12} />
                       </a>
-                      {(stage === "PR" || stage === "PO" || stage === "GRN") ? (
-                        <>
-                          <button
-                            onClick={() => openEditor("approve", doc)}
-                            style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#107E3E", backgroundColor: "#ffffff", border: "1px solid #107E3E", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
-                          >
-                            Approve
-                          </button>
-                          <button
-                            onClick={() => openEditor("reject", doc)}
-                            style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#BB0000", backgroundColor: "#ffffff", border: "1px solid #BB0000", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
-                          >
-                            Reject
-                          </button>
-                          <button
-                            onClick={() => openEditor("comment", doc)}
-                            style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#475569", backgroundColor: "#ffffff", border: "1px solid #d9d9d9", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
-                          >
-                            {doc.attachment_comment ? "Edit Comment" : "Add Comment"}
-                          </button>
-                        </>
-                      ) : null}
+                    </div>
+                  </td>
+                  <td style={TD_STYLE}>{reference}</td>
+                  <td style={TD_STYLE}>v{doc.version}</td>
+                  <td style={TD_STYLE}>{formatDate(doc.uploaded_at)}</td>
+                  <td style={TD_STYLE}>{doc.review_status}</td>
+                  <td style={{ ...TD_STYLE, borderRight: "none" }}>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      <button
+                        onClick={() => void onReview(stage as "PR" | "PO" | "GRN", reference, doc, "ACCEPTED")}
+                        style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#107E3E", backgroundColor: "#ffffff", border: "1px solid #107E3E", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
+                      >
+                        <span style={{ color: "#107E3E", fontSize: "12px", fontWeight: "800", lineHeight: 1 }}>✓</span>
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => openEditor("reject", doc)}
+                        style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#BB0000", backgroundColor: "#ffffff", border: "1px solid #BB0000", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
+                      >
+                        <span style={{ color: "#BB0000", fontSize: "12px", fontWeight: "800", lineHeight: 1 }}>X</span>
+                        Reject
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -286,94 +332,107 @@ function AttachmentSubCard({
         </div>
       )}
 
-      {activeDoc && (activeDoc.attachment_comment || activeDoc.review_comment || editor) ? (
-        <div style={{ borderTop: "1px solid #dbeafe", backgroundColor: "#fbfdff", padding: "14px 16px", display: "flex", flexDirection: "column", gap: "10px" }}>
+      {activeDoc && activeDoc.review_status === "REJECTED" ? (
+        <div style={{ borderTop: "1px solid #dbeafe", backgroundColor: "#fbfdff", padding: "18px 16px", display: "flex", flexDirection: "column", gap: "12px", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: "11px", fontWeight: "700", color: "#0f172a" }}>Document Notes</div>
-            <div style={{ fontSize: "10px", color: "#64748b", marginTop: "2px" }}>{activeDoc.original_filename}</div>
+            <div style={{ fontSize: "11px", fontWeight: "700", color: "#0f172a", textAlign: "center" }}>Rejected Comment</div>
+            <div style={{ fontSize: "10px", color: "#64748b", marginTop: "2px", textAlign: "center" }}>{activeDoc.original_filename}</div>
           </div>
 
-          {activeDoc.attachment_comment ? (
-            <div style={{ padding: "10px 12px", border: "1px solid #dbeafe", borderRadius: "10px", backgroundColor: "#f8fbff" }}>
-              <div style={{ fontSize: "10px", fontWeight: "700", color: "#1e40af", marginBottom: "4px" }}>Attachment Comment</div>
-              <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap" }}>{activeDoc.attachment_comment}</div>
+          <div style={{ width: "100%", maxWidth: "560px", padding: "12px 14px", border: "1px solid #fde68a", borderRadius: "10px", backgroundColor: "#fffdf5" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+              <div style={{ fontSize: "10px", fontWeight: "700", color: "#b45309" }}>Comment</div>
+              <button
+                type="button"
+                onClick={() => openEditor("reject", activeDoc)}
+                style={{ display: "flex", alignItems: "center", gap: "4px", border: "none", backgroundColor: "transparent", color: "#0070F2", fontSize: "10px", fontWeight: "700", cursor: "pointer" }}
+              >
+                <Edit size={11} />
+                Edit Comment
+              </button>
             </div>
-          ) : null}
-
-          {activeDoc.review_comment ? (
-            <div style={{ padding: "10px 12px", border: "1px solid #fde68a", borderRadius: "10px", backgroundColor: "#fffdf5" }}>
-              <div style={{ fontSize: "10px", fontWeight: "700", color: "#b45309", marginBottom: "4px" }}>Review Note</div>
-              <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap" }}>{activeDoc.review_comment}</div>
+            <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap", marginTop: "6px" }}>
+              {activeDoc.attachment_comment || activeDoc.review_comment || "No rejection comment added."}
             </div>
-          ) : null}
-
-          {editor && activeDoc._id === editor.docId ? (
-            <div style={{ padding: "12px", border: "1px solid #cbd5e1", borderRadius: "12px", backgroundColor: "#ffffff", display: "flex", flexDirection: "column", gap: "8px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#0f172a" }}>
-                {editor.mode === "comment" ? "Add Attachment Comment" : editor.mode === "approve" ? "Approve Document" : "Reject Document"}
-              </div>
-              <textarea
-                value={draftText}
-                onChange={(e) => setDraftText(e.target.value)}
-                rows={3}
-                placeholder={editor.mode === "comment" ? "Enter attachment comment" : editor.mode === "approve" ? "Enter approval note" : "Enter rejection reason"}
-                style={{ width: "100%", padding: "9px 11px", border: "1px solid #cbd5e1", borderRadius: "10px", fontSize: "11px", color: "#334155", resize: "vertical", outline: "none" }}
-              />
-              {editor.mode === "reject" && stage === "GRN" ? (
-                <div style={{ fontSize: "10px", color: "#BB0000" }}>A rejection reason is required for GRN documents.</div>
-              ) : null}
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
-                <button
-                  type="button"
-                  onClick={closeEditor}
-                  disabled={submitting}
-                  style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleSubmit()}
-                  disabled={submitting || (editor.mode === "reject" && stage === "GRN" && !draftText.trim())}
-                  style={{ padding: "7px 14px", borderRadius: "8px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting || (editor.mode === "reject" && stage === "GRN" && !draftText.trim()) ? 0.6 : 1 }}
-                >
-                  {submitting ? "Saving..." : editor.mode === "comment" ? "Save Comment" : editor.mode === "approve" ? "Approve" : "Reject"}
-                </button>
-              </div>
-            </div>
-          ) : null}
+            <button
+              type="button"
+              onClick={() => setDeletePromptDocId(activeDoc._id)}
+              style={{ display: "flex", alignItems: "center", gap: "4px", border: "none", backgroundColor: "transparent", color: "#BB0000", fontSize: "10px", fontWeight: "700", cursor: "pointer", marginTop: "10px", marginLeft: "auto" }}
+            >
+              <Trash2 size={11} />
+              Delete Comment
+            </button>
+          </div>
         </div>
       ) : null}
-    </div>
-  );
-}
 
-function MetaChip({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "3px",
-        padding: "10px 16px",
-        backgroundColor: highlight ? "#eff6ff" : "#f8fafc",
-        border: `1px solid ${highlight ? "#bfdbfe" : "#e2e8f0"}`,
-        borderRadius: "10px",
-        minWidth: "148px",
-      }}
-    >
-      <span
-        style={{
-          fontSize: "10px",
-          fontWeight: "700",
-          color: "#94a3b8",
-          textTransform: "uppercase",
-          letterSpacing: "0.04em",
-        }}
-      >
-        {label}
-      </span>
-      <span style={{ fontSize: "13px", fontWeight: "600", color: highlight ? "#1d4ed8" : "#0f172a" }}>{value}</span>
+      {editor && activeDoc && activeDoc._id === editor.docId ? (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(15, 23, 42, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", zIndex: 1000 }}>
+          <div style={{ width: "100%", maxWidth: "480px", backgroundColor: "#ffffff", borderRadius: "16px", border: "1px solid #dbe3ee", boxShadow: "0 20px 40px rgba(15, 23, 42, 0.18)", padding: "18px", display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>Reject Document</div>
+            <div style={{ fontSize: "11px", color: "#64748b" }}>
+              {stage === "GRN" ? "Enter the rejection reason for this document." : "Add or edit the rejection comment for this document."}
+            </div>
+            <textarea
+              value={draftText}
+              onChange={(e) => setDraftText(e.target.value)}
+              rows={4}
+              placeholder="Enter rejection reason"
+              style={{ width: "100%", padding: "9px 11px", border: "1px solid #cbd5e1", borderRadius: "10px", fontSize: "11px", color: "#334155", resize: "vertical", outline: "none" }}
+            />
+            {stage === "GRN" && !draftText.trim() ? (
+              <div style={{ fontSize: "10px", color: "#BB0000" }}>A rejection reason is required for GRN documents.</div>
+            ) : null}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={closeEditor}
+                disabled={submitting}
+                style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSubmit()}
+                disabled={submitting || (stage === "GRN" && !draftText.trim())}
+                style={{ padding: "7px 14px", borderRadius: "8px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting || (stage === "GRN" && !draftText.trim()) ? 0.6 : 1 }}
+              >
+                {submitting ? "Saving..." : "Reject"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deletePromptDocId && activeDoc && activeDoc._id === deletePromptDocId ? (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(15, 23, 42, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", zIndex: 1000 }}>
+          <div style={{ width: "100%", maxWidth: "480px", backgroundColor: "#ffffff", borderRadius: "16px", border: "1px solid #dbe3ee", boxShadow: "0 20px 40px rgba(15, 23, 42, 0.18)", padding: "18px", display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>Delete Comment</div>
+            <div style={{ fontSize: "11px", color: "#64748b" }}>
+              Do you really want to delete this message?
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={closeDeletePrompt}
+                disabled={submitting}
+                style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteComment()}
+                disabled={submitting}
+                style={{ padding: "7px 14px", borderRadius: "8px", border: "none", backgroundColor: "#BB0000", color: "#ffffff", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+              >
+                {submitting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -416,324 +475,6 @@ function DataTable({
           )}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-function InvoiceDocumentPanel({
-  invoiceNumber,
-  docs,
-  docsLoading,
-  action,
-  onActionChange,
-  onUpload,
-  onReplace,
-  onReview,
-  onComment,
-  selectedDocumentId,
-  onSelectDocument,
-}: {
-  invoiceNumber: string;
-  docs: StageDocument[];
-  docsLoading: boolean;
-  action: "upload" | "view" | "change";
-  onActionChange: (action: "upload" | "view" | "change") => void;
-  onUpload: (file: File) => Promise<void>;
-  onReplace: (documentId: string, file: File) => Promise<void>;
-  onReview: (doc: StageDocument, decision: "ACCEPTED" | "REJECTED", comment?: string) => Promise<void>;
-  onComment: (doc: StageDocument, comment?: string) => Promise<void>;
-  selectedDocumentId: string | null;
-  onSelectDocument: (documentId: string) => void;
-}) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const selectedDoc = docs.find((doc) => doc._id === selectedDocumentId) || docs[0] || null;
-  const pendingMode = useRef<"upload" | "change">("upload");
-  const [editor, setEditor] = useState<{ mode: "comment" | "approve" | "reject"; docId: string } | null>(null);
-  const [draftText, setDraftText] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  const triggerFilePicker = (mode: "upload" | "change") => {
-    pendingMode.current = mode;
-    inputRef.current?.click();
-  };
-
-  const handleFileSelection = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    if (pendingMode.current === "change") {
-      if (!selectedDoc) return;
-      await onReplace(selectedDoc._id, file);
-    } else {
-      await onUpload(file);
-    }
-
-    event.target.value = "";
-  };
-
-  const openEditor = (mode: "comment" | "approve" | "reject", doc: StageDocument) => {
-    onSelectDocument(doc._id);
-    setEditor({ mode, docId: doc._id });
-    setDraftText(mode === "comment" ? doc.attachment_comment || "" : doc.review_comment || "");
-  };
-
-  const closeEditor = () => {
-    setEditor(null);
-    setDraftText("");
-  };
-
-  const handleEditorSubmit = async () => {
-    if (!editor) return;
-    const doc = docs.find((item) => item._id === editor.docId);
-    if (!doc) return;
-    const cleanText = draftText.trim();
-
-    setSubmitting(true);
-    try {
-      if (editor.mode === "comment") {
-        await onComment(doc, cleanText || undefined);
-      } else {
-        await onReview(doc, editor.mode === "approve" ? "ACCEPTED" : "REJECTED", cleanText || undefined);
-      }
-      closeEditor();
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div
-      style={{
-        backgroundColor: "#ffffff",
-        border: "1px solid #e2e8f0",
-        borderRadius: "16px",
-        overflow: "hidden",
-        boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
-      }}
-    >
-      <div style={{ padding: "16px 20px", borderBottom: "1px solid #f1f5f9", backgroundColor: "#fafcff", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
-        <div>
-          <div style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Invoice Attachment</div>
-          <div style={{ fontSize: "11px", color: "#64748b", marginTop: "3px" }}>{invoiceNumber}</div>
-        </div>
-      </div>
-
-      <input ref={inputRef} type="file" accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp" style={{ display: "none" }} onChange={(event) => void handleFileSelection(event)} />
-
-      {docsLoading ? (
-        <div style={{ padding: "16px", display: "flex", alignItems: "center", gap: "8px", color: "#6A6D70", fontSize: "12px" }}>
-          <LoaderCircle size={14} className="animate-spin" />
-          Loading invoice document...
-        </div>
-      ) : docs.length === 0 ? (
-        <div style={{ padding: "16px 20px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
-          <div style={{ fontSize: "12px", color: "#94a3b8" }}>No invoice document uploaded yet.</div>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-            <button
-              onClick={() => {
-                onActionChange("upload");
-                triggerFilePicker("upload");
-              }}
-              style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}
-            >
-              <Edit size={14} /> Edit
-            </button>
-            <button
-              onClick={() => onActionChange("view")}
-              style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: action === "view" ? "1px solid #0070F2" : "1px solid #d9d9d9", backgroundColor: action === "view" ? "#eff6ff" : "#ffffff", color: action === "view" ? "#0070F2" : "#32363a", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}
-              disabled={!selectedDoc}
-            >
-              <Eye size={14} /> View
-            </button>
-            <button
-              onClick={() => selectedDoc && openEditor("approve", selectedDoc)}
-              disabled={!selectedDoc}
-              style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "1px solid #107E3E", backgroundColor: "#ffffff", color: "#107E3E", fontSize: "13px", fontWeight: "700", cursor: selectedDoc ? "pointer" : "not-allowed", opacity: selectedDoc ? 1 : 0.55 }}
-            >
-              Approve
-            </button>
-            <button
-              onClick={() => selectedDoc && openEditor("reject", selectedDoc)}
-              disabled={!selectedDoc}
-              style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "1px solid #BB0000", backgroundColor: "#ffffff", color: "#BB0000", fontSize: "13px", fontWeight: "700", cursor: selectedDoc ? "pointer" : "not-allowed", opacity: selectedDoc ? 1 : 0.55 }}
-            >
-              Reject
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: "760px" }}>
-              <thead>
-                <tr>
-                  {["File Name", "Version", "Uploaded", "Size", "Actions"].map((header, index, arr) => (
-                    <th
-                      key={header}
-                      style={{ ...TH_STYLE, fontSize: "11px", backgroundColor: "#f8fbff", borderRight: index === arr.length - 1 ? "none" : TH_STYLE.borderRight }}
-                    >
-                      {header}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {docs.map((doc, index) => (
-                  <tr key={doc._id} style={{ backgroundColor: index % 2 === 0 ? "#ffffff" : "#fafcff" }}>
-                    <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "600" }}>{doc.original_filename}</td>
-                    <td style={TD_STYLE}>v{doc.version}</td>
-                    <td style={TD_STYLE}>{formatDate(doc.uploaded_at)}</td>
-                    <td style={TD_STYLE}>{formatFileSize(doc.file_size)}</td>
-                    <td style={{ ...TD_STYLE, borderRight: "none" }}>
-                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                        <button
-                          onClick={() => {
-                            onActionChange("view");
-                            onSelectDocument(doc._id);
-                            window.open(getDocumentDownloadUrl("INVOICE", doc._id, true), "_blank", "noopener,noreferrer");
-                          }}
-                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#0070F2", backgroundColor: "#ffffff", border: "1px solid #0070F2", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
-                        >
-                          <Eye size={11} />
-                          View
-                        </button>
-                        <a
-                          href={getDocumentDownloadUrl("INVOICE", doc._id)}
-                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#475569", textDecoration: "none", border: "1px solid #d9d9d9", borderRadius: "7px", backgroundColor: "#ffffff", fontSize: "11px", fontWeight: "600" }}
-                        >
-                          <Download size={11} />
-                          Download
-                        </a>
-                        <button
-                          onClick={() => {
-                            onActionChange("upload");
-                            onSelectDocument(doc._id);
-                            triggerFilePicker("upload");
-                          }}
-                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#0070F2", backgroundColor: "#ffffff", border: "1px solid #0070F2", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
-                        >
-                          <Edit size={11} />
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => openEditor("approve", doc)}
-                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#107E3E", backgroundColor: "#ffffff", border: "1px solid #107E3E", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          onClick={() => openEditor("reject", doc)}
-                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#BB0000", backgroundColor: "#ffffff", border: "1px solid #BB0000", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
-                        >
-                          Reject
-                        </button>
-                        <button
-                          onClick={() => openEditor("comment", doc)}
-                          style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "4px 10px", color: "#475569", backgroundColor: "#ffffff", border: "1px solid #d9d9d9", borderRadius: "7px", fontSize: "11px", fontWeight: "600", cursor: "pointer" }}
-                        >
-                          {doc.attachment_comment ? "Edit Comment" : "Add Comment"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {selectedDoc && (selectedDoc.attachment_comment || selectedDoc.review_comment || editor) ? (
-            <div style={{ margin: "0 20px 20px", padding: "14px", border: "1px solid #cbd5e1", borderRadius: "12px", backgroundColor: "#fbfdff", display: "flex", flexDirection: "column", gap: "10px" }}>
-              <div>
-                <div style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a" }}>Document Notes</div>
-                <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>{selectedDoc.original_filename}</div>
-              </div>
-              {selectedDoc.attachment_comment ? (
-                <div style={{ padding: "10px 12px", border: "1px solid #dbeafe", borderRadius: "10px", backgroundColor: "#f8fbff" }}>
-                  <div style={{ fontSize: "10px", fontWeight: "700", color: "#1e40af", marginBottom: "4px" }}>Attachment Comment</div>
-                  <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap" }}>{selectedDoc.attachment_comment}</div>
-                </div>
-              ) : null}
-              {selectedDoc.review_comment ? (
-                <div style={{ padding: "10px 12px", border: "1px solid #fde68a", borderRadius: "10px", backgroundColor: "#fffdf5" }}>
-                  <div style={{ fontSize: "10px", fontWeight: "700", color: "#b45309", marginBottom: "4px" }}>Review Note</div>
-                  <div style={{ fontSize: "11px", color: "#334155", whiteSpace: "pre-wrap" }}>{selectedDoc.review_comment}</div>
-                </div>
-              ) : null}
-              {editor && selectedDoc._id === editor.docId ? (
-                <div style={{ padding: "12px", border: "1px solid #cbd5e1", borderRadius: "12px", backgroundColor: "#ffffff", display: "flex", flexDirection: "column", gap: "8px" }}>
-                  <div style={{ fontSize: "11px", fontWeight: "700", color: "#0f172a" }}>
-                    {editor.mode === "comment" ? "Add Attachment Comment" : editor.mode === "approve" ? "Approve Document" : "Reject Document"}
-                  </div>
-                  <textarea
-                    value={draftText}
-                    onChange={(e) => setDraftText(e.target.value)}
-                    rows={3}
-                    placeholder={editor.mode === "comment" ? "Enter attachment comment" : editor.mode === "approve" ? "Enter approval note" : "Enter rejection reason"}
-                    style={{ width: "100%", padding: "9px 11px", border: "1px solid #cbd5e1", borderRadius: "10px", fontSize: "11px", color: "#334155", resize: "vertical", outline: "none" }}
-                  />
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", flexWrap: "wrap" }}>
-                    <button
-                      type="button"
-                      onClick={closeEditor}
-                      disabled={submitting}
-                      style={{ padding: "7px 12px", borderRadius: "8px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleEditorSubmit()}
-                      disabled={submitting}
-                      style={{ padding: "7px 14px", borderRadius: "8px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "11px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
-                    >
-                      {submitting ? "Saving..." : editor.mode === "comment" ? "Save Comment" : editor.mode === "approve" ? "Approve" : "Reject"}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-              <button
-                onClick={() => {
-                  onActionChange("upload");
-                  triggerFilePicker("upload");
-                }}
-                style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}
-              >
-                <Edit size={14} /> Edit
-              </button>
-              <button
-                onClick={() => onActionChange("view")}
-                style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: action === "view" ? "1px solid #0070F2" : "1px solid #d9d9d9", backgroundColor: action === "view" ? "#eff6ff" : "#ffffff", color: action === "view" ? "#0070F2" : "#32363a", fontSize: "13px", fontWeight: "700", cursor: "pointer" }}
-              >
-                <Eye size={14} /> View
-              </button>
-              <button
-                onClick={() => selectedDoc && openEditor("approve", selectedDoc)}
-                disabled={!selectedDoc}
-                style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "1px solid #107E3E", backgroundColor: "#ffffff", color: "#107E3E", fontSize: "13px", fontWeight: "700", cursor: selectedDoc ? "pointer" : "not-allowed", opacity: selectedDoc ? 1 : 0.55 }}
-              >
-                Approve
-              </button>
-              <button
-                onClick={() => selectedDoc && openEditor("reject", selectedDoc)}
-                disabled={!selectedDoc}
-                style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "1px solid #BB0000", backgroundColor: "#ffffff", color: "#BB0000", fontSize: "13px", fontWeight: "700", cursor: selectedDoc ? "pointer" : "not-allowed", opacity: selectedDoc ? 1 : 0.55 }}
-              >
-                Reject
-              </button>
-              <button
-                onClick={() => selectedDoc && openEditor("comment", selectedDoc)}
-                disabled={!selectedDoc}
-                style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "10px 18px", height: "44px", borderRadius: "10px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#32363a", fontSize: "13px", fontWeight: "700", cursor: selectedDoc ? "pointer" : "not-allowed", opacity: selectedDoc ? 1 : 0.55 }}
-              >
-                {selectedDoc?.attachment_comment ? "Edit Comment" : "Add Comment"}
-              </button>
-            </div>
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -822,16 +563,21 @@ export function InvoiceModule() {
   const [grnRecords, setGrnRecords] = useState<GRNRecord[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<string>(initialDocNumber);
   const [aggregate, setAggregate] = useState<InvoiceAggregate | null>(null);
-  const [invoiceAction, setInvoiceAction] = useState<"upload" | "view" | "change">("upload");
-  const [invoiceDocs, setInvoiceDocs] = useState<StageDocument[]>([]);
-  const [invoiceDocsLoading, setInvoiceDocsLoading] = useState(false);
-  const [invoiceUploading, setInvoiceUploading] = useState(false);
-  const [selectedInvoiceDocId, setSelectedInvoiceDocId] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [linkedDocs, setLinkedDocs] = useState<Record<"PR" | "PO" | "GRN", StageDocument[]>>({ PR: [], PO: [], GRN: [] });
   const [docsLoading, setDocsLoading] = useState<Record<"PR" | "PO" | "GRN", boolean>>({ PR: false, PO: false, GRN: false });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [hiddenSections, setHiddenSections] = useState({
+    overview: false,
+    pr: false,
+    po: false,
+    grn: false,
+  });
+  const overviewSectionRef = useRef<HTMLDivElement | null>(null);
+  const prSectionRef = useRef<HTMLDivElement | null>(null);
+  const poSectionRef = useRef<HTMLDivElement | null>(null);
+  const grnSectionRef = useRef<HTMLDivElement | null>(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -959,17 +705,66 @@ export function InvoiceModule() {
 
   const activeAggregate = aggregate;
   const activeInvoice = activeAggregate?.invoice ?? null;
-  const linkedItemCount =
-    (activeAggregate?.purchase_requisition?.items.length ?? 0) +
-    (activeAggregate?.purchase_order?.items.length ?? 0) +
-    (activeAggregate?.goods_receipt?.items.length ?? 0);
   const usesSyntheticLinkage = activeInvoice?.status === "DEMO_LINKED";
 
   useEffect(() => {
+    if (!activeAggregate || usesSyntheticLinkage) return;
+
+    const invoiceNumber = activeAggregate.invoice.invoice_number;
+    let cancelled = false;
+
+    void (async () => {
+      let nextPr = activeAggregate.purchase_requisition;
+      let nextPo = activeAggregate.purchase_order;
+      let nextGrn = activeAggregate.goods_receipt;
+
+      try {
+        const grnRef = nextGrn?.grn_number || activeAggregate.invoice.grn_number || "";
+        if (!nextGrn && grnRef) {
+          nextGrn = await getStageRecord("GRN", grnRef) as GRNRecord;
+        }
+
+        const poRef = nextPo?.po_number || nextGrn?.po_number || activeAggregate.invoice.po_number || "";
+        if (!nextPo && poRef) {
+          nextPo = await getStageRecord("PO", poRef) as PORecord;
+        }
+
+        const prRef = nextPr?.pr_number || nextPo?.pr_number || activeAggregate.invoice.pr_number || "";
+        if (!nextPr && prRef) {
+          nextPr = await getStageRecord("PR", prRef) as PRRecord;
+        }
+      } catch {
+        // Keep the current aggregate when one of the linked lookups is unavailable.
+      }
+
+      if (cancelled) return;
+
+      setAggregate((current) => {
+        if (!current || current.invoice.invoice_number !== invoiceNumber) return current;
+        if (
+          current.purchase_requisition === nextPr &&
+          current.purchase_order === nextPo &&
+          current.goods_receipt === nextGrn
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          purchase_requisition: nextPr,
+          purchase_order: nextPo,
+          goods_receipt: nextGrn,
+        };
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAggregate, usesSyntheticLinkage]);
+
+  useEffect(() => {
     if (!activeAggregate) {
-      setInvoiceDocs([]);
-      setInvoiceDocsLoading(false);
-      setSelectedInvoiceDocId(null);
       setLinkedDocs({ PR: [], PO: [], GRN: [] });
       setDocsLoading({ PR: false, PO: false, GRN: false });
       return;
@@ -1011,98 +806,6 @@ export function InvoiceModule() {
     };
   }, [activeAggregate]);
 
-  useEffect(() => {
-    if (!activeInvoice?.invoice_number || usesSyntheticLinkage) {
-      setInvoiceDocs([]);
-      setInvoiceDocsLoading(false);
-      setSelectedInvoiceDocId(null);
-      return;
-    }
-
-    let cancelled = false;
-    setInvoiceDocsLoading(true);
-
-    void listDocuments("INVOICE", activeInvoice.invoice_number)
-      .then((result) => {
-        if (cancelled) return;
-        const docs = "documents" in result ? result.documents : result.document ? [result.document] : [];
-        setInvoiceDocs(docs);
-        setSelectedInvoiceDocId((current) => {
-          if (current && docs.some((doc: StageDocument) => doc._id === current)) return current;
-          return docs[0]?._id ?? null;
-        });
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setInvoiceDocs([]);
-        setSelectedInvoiceDocId(null);
-      })
-      .finally(() => {
-        if (!cancelled) setInvoiceDocsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeInvoice?.invoice_number, usesSyntheticLinkage]);
-
-  const handleInvoiceUpload = async (file: File) => {
-    if (!activeInvoice?.invoice_number) return;
-    setInvoiceUploading(true);
-    setError(null);
-    try {
-      const uploaded = await uploadDocuments("INVOICE", activeInvoice.invoice_number, [file]);
-      setInvoiceAction("view");
-      const refreshed = await listDocuments("INVOICE", activeInvoice.invoice_number);
-      const docs = "documents" in refreshed ? refreshed.documents : refreshed.document ? [refreshed.document] : [];
-      setInvoiceDocs(docs);
-      setSelectedInvoiceDocId(docs[0]?._id ?? null);
-      setAggregate((current) => current ? { ...current, has_document: true, uploaded_document: uploaded as StageDocument } : current);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to upload invoice document.");
-    } finally {
-      setInvoiceUploading(false);
-    }
-  };
-
-  const handleInvoiceReplace = async (documentId: string, file: File) => {
-    if (!activeInvoice?.invoice_number) return;
-    setInvoiceUploading(true);
-    setError(null);
-    try {
-      const updated = await replaceDocument("INVOICE", activeInvoice.invoice_number, documentId, file);
-      setInvoiceAction("view");
-      setInvoiceDocs([updated]);
-      setSelectedInvoiceDocId(updated._id);
-      setAggregate((current) => current ? { ...current, has_document: true, uploaded_document: updated } : current);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to replace invoice document.");
-    } finally {
-      setInvoiceUploading(false);
-    }
-  };
-
-  const handleInvoiceReview = async (doc: StageDocument, decision: "ACCEPTED" | "REJECTED", comment?: string) => {
-    if (!activeInvoice?.invoice_number) return;
-    setError(null);
-
-    try {
-      const cleanComment = (comment || "").trim();
-      const updated = await reviewDocument("INVOICE", activeInvoice.invoice_number, doc._id, decision, cleanComment || undefined);
-      setInvoiceDocs((current) => current.map((item) => (item._id === updated._id ? updated : item)));
-      setSelectedInvoiceDocId(updated._id);
-      setAggregate((current) => current ? { ...current, has_document: true, uploaded_document: updated } : current);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to update invoice document review status.");
-    }
-  };
-
-  useEffect(() => {
-    if (invoiceAction === "view" && selectedInvoiceDocId) {
-      window.open(getDocumentDownloadUrl("INVOICE", selectedInvoiceDocId, true), "_blank", "noopener,noreferrer");
-    }
-  }, [invoiceAction, selectedInvoiceDocId]);
-
   const handleLinkedDocumentReview = async (stage: "PR" | "PO" | "GRN", reference: string, doc: StageDocument, decision: "ACCEPTED" | "REJECTED", comment?: string) => {
     setError(null);
     const cleanComment = (comment || "").trim();
@@ -1136,6 +839,7 @@ export function InvoiceModule() {
     }
   };
 
+
   if (loading) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", gap: "8px", color: "#6A6D70", fontSize: "13px" }}>
@@ -1149,6 +853,7 @@ export function InvoiceModule() {
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
       <FilterBar
         docType="INV"
+        actionLabel="Display Data"
         onSearch={(next) => {
           setFilters(next);
           setHasSearched(true);
@@ -1158,7 +863,6 @@ export function InvoiceModule() {
         }}
         valueHelpItems={valueHelpItems}
         valueHelpSources={{
-          docNumber: valueHelpItems,
           prNumber: prRecords.map((record) => ({ id: record.pr_number, description: "" })),
           poNumber: poRecords.map((record) => ({ id: record.po_number, description: "" })),
           grnNumber: grnRecords.map((record) => ({ id: record.grn_number, description: "" })),
@@ -1169,15 +873,46 @@ export function InvoiceModule() {
 
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
         <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
-          {!hasSearched ? (
-            <SelectionPlaceholder
-              title="Use Go to load invoice records"
-              description="Leave all invoice filter fields blank and press Go to display every invoice, or enter PR, PO, or GRN values to surface the linked verification view."
-            />
-          ) : (
-            <SectionTable title="Invoice Overview" badge={`${displayRows.length} invoice record(s)`}>
+          {hasSearched ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", padding: "4px 0" }}>
+              {[
+                { label: "Invoice Overview", ref: overviewSectionRef },
+                { label: "Linked Purchase Requisition (PR)", ref: prSectionRef },
+                { label: "Linked Purchase Order (PO)", ref: poSectionRef },
+                { label: "Linked Goods Receipt Note (GRN)", ref: grnSectionRef },
+              ].map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => item.ref.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  style={{
+                    border: "1px solid #d9d9d9",
+                    backgroundColor: "#ffffff",
+                    color: "#334155",
+                    borderRadius: "999px",
+                    padding: "7px 12px",
+                    fontSize: "11px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {!hasSearched ? null : (
+            <div ref={overviewSectionRef}>
+              <SectionTable
+                title="Invoice Overview"
+                badge={`${displayRows.length} invoice record(s)`}
+                collapsible
+                collapsed={hiddenSections.overview}
+                onToggle={() => setHiddenSections((current) => ({ ...current, overview: !current.overview }))}
+              >
               <DataTable
-                headers={["Invoice Number", "PR Number", "PO Number", "GRN Number", "Status", "Created"]}
+                headers={["PR Number", "PO Number", "GRN Number", "Status", "Created"]}
                 emptyMessage="No invoices found for the selected filters."
               >
                 {displayRows.map((row, index) => (
@@ -1190,7 +925,6 @@ export function InvoiceModule() {
                       cursor: "pointer",
                     }}
                   >
-                    <td style={{ ...TD_STYLE, color: "#2563eb", fontWeight: "700" }}>{row.invoiceNumber}</td>
                     <td style={{ ...TD_STYLE, color: "#2563eb" }}>{row.prNumber || ""}</td>
                     <td style={{ ...TD_STYLE, color: "#2563eb" }}>{row.poNumber || ""}</td>
                     <td style={{ ...TD_STYLE, color: "#2563eb" }}>{row.grnNumber || ""}</td>
@@ -1199,7 +933,8 @@ export function InvoiceModule() {
                   </tr>
                 ))}
               </DataTable>
-            </SectionTable>
+              </SectionTable>
+            </div>
           )}
 
           {hasSearched && !selectedInvoice ? (
@@ -1211,79 +946,6 @@ export function InvoiceModule() {
 
           {hasSearched && selectedInvoice && activeAggregate ? (
             <>
-              <div
-                style={{
-                  backgroundColor: "#ffffff",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: "18px",
-                  overflow: "hidden",
-                  boxShadow: "0 2px 8px rgba(15,23,42,0.07)",
-                }}
-              >
-                <div
-                  style={{
-                    padding: "20px 24px 16px",
-                    borderBottom: "1px solid #f1f5f9",
-                    display: "flex",
-                    alignItems: "flex-start",
-                    justifyContent: "space-between",
-                    gap: "16px",
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                    <div style={{ fontSize: "12px", fontWeight: "700", color: "#1d4ed8", display: "flex", alignItems: "center", gap: "8px" }}>
-                      <Link2 size={14} />
-                      Invoice verification linkage
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "14px", flexWrap: "wrap" }}>
-                      <div style={{ fontSize: "28px", fontWeight: "800", color: "#0f172a", letterSpacing: "-0.5px" }}>
-                        {activeInvoice?.invoice_number}
-                      </div>
-                      {statusBadge(activeInvoice?.status || "PENDING", usesSyntheticLinkage)}
-                    </div>
-                  </div>
-                  <div style={{ fontSize: "12px", color: usesSyntheticLinkage ? "#1d4ed8" : "#64748b", fontWeight: "600" }}>
-                    {usesSyntheticLinkage ? "Showing generated demo linkage from the selected PR/PO/GRN chain." : "Showing live invoice linkage from the current dataset."}
-                  </div>
-                </div>
-
-                <div style={{ padding: "20px 24px", display: "flex", gap: "12px", flexWrap: "wrap" }}>
-                  <MetaChip label="Invoice" value={activeInvoice?.invoice_number || ""} highlight />
-                  <MetaChip label="Purchase Requisition" value={activeInvoice?.pr_number || ""} />
-                  <MetaChip label="Purchase Order" value={activeInvoice?.po_number || ""} />
-                  <MetaChip label="Goods Receipt" value={activeInvoice?.grn_number || ""} />
-                  <MetaChip label="Linked Items" value={`${linkedItemCount}`} />
-                  <MetaChip label="Invoice Document" value={activeAggregate.has_document ? "Uploaded" : "Not uploaded"} />
-                </div>
-              </div>
-
-              <InvoiceDocumentPanel
-                invoiceNumber={activeInvoice?.invoice_number || ""}
-                docs={invoiceDocs}
-                docsLoading={invoiceDocsLoading || invoiceUploading}
-                action={invoiceAction}
-                onActionChange={setInvoiceAction}
-              onUpload={handleInvoiceUpload}
-              onReplace={handleInvoiceReplace}
-              onReview={handleInvoiceReview}
-              onComment={async (doc, comment) => {
-                if (!activeInvoice?.invoice_number) return;
-                setError(null);
-                try {
-                  const cleanComment = (comment || "").trim();
-                  const updated = await commentDocument("INVOICE", activeInvoice.invoice_number, doc._id, cleanComment || undefined);
-                  setInvoiceDocs((current) => current.map((item) => (item._id === updated._id ? updated : item)));
-                  setSelectedInvoiceDocId(updated._id);
-                  setAggregate((current) => current ? { ...current, has_document: true, uploaded_document: updated } : current);
-                } catch (loadError) {
-                  setError(loadError instanceof Error ? loadError.message : "Unable to save invoice document comment.");
-                }
-              }}
-              selectedDocumentId={selectedInvoiceDocId}
-              onSelectDocument={setSelectedInvoiceDocId}
-            />
-
               {detailLoading ? (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "32px", gap: "8px", color: "#6A6D70", fontSize: "13px" }}>
                   <LoaderCircle className="animate-spin" size={18} />
@@ -1291,9 +953,13 @@ export function InvoiceModule() {
                 </div>
               ) : null}
 
+              <div ref={prSectionRef}>
               <SectionTable
                 title="Linked Purchase Requisition (PR)"
                 badge={activeAggregate.purchase_requisition?.items.length ? `${activeAggregate.purchase_requisition.items.length} item(s)` : undefined}
+                collapsible
+                collapsed={hiddenSections.pr}
+                onToggle={() => setHiddenSections((current) => ({ ...current, pr: !current.pr }))}
               >
                 {activeAggregate.purchase_requisition ? (
                   <>
@@ -1326,10 +992,15 @@ export function InvoiceModule() {
                   <div style={{ padding: "18px 20px", fontSize: "12px", color: "#8a8b8c" }}>No linked PR details found for this invoice.</div>
                 )}
               </SectionTable>
+              </div>
 
+              <div ref={poSectionRef}>
               <SectionTable
                 title="Linked Purchase Order (PO)"
                 badge={activeAggregate.purchase_order?.items.length ? `${activeAggregate.purchase_order.items.length} item(s)` : undefined}
+                collapsible
+                collapsed={hiddenSections.po}
+                onToggle={() => setHiddenSections((current) => ({ ...current, po: !current.po }))}
               >
                 {activeAggregate.purchase_order ? (
                   <>
@@ -1361,10 +1032,15 @@ export function InvoiceModule() {
                   <div style={{ padding: "18px 20px", fontSize: "12px", color: "#8a8b8c" }}>No linked PO details found for this invoice.</div>
                 )}
               </SectionTable>
+              </div>
 
+              <div ref={grnSectionRef}>
               <SectionTable
                 title="Linked Goods Receipt Note (GRN)"
                 badge={activeAggregate.goods_receipt?.items.length ? `${activeAggregate.goods_receipt.items.length} item(s)` : undefined}
+                collapsible
+                collapsed={hiddenSections.grn}
+                onToggle={() => setHiddenSections((current) => ({ ...current, grn: !current.grn }))}
               >
                 {activeAggregate.goods_receipt ? (
                   <>
@@ -1397,6 +1073,7 @@ export function InvoiceModule() {
                   <div style={{ padding: "18px 20px", fontSize: "12px", color: "#8a8b8c" }}>No linked GRN details found for this invoice.</div>
                 )}
               </SectionTable>
+              </div>
             </>
           ) : null}
 
@@ -1411,9 +1088,8 @@ export function InvoiceModule() {
 
       <ModuleFooterAlerts
         error={error}
-        infoMessage={usesSyntheticLinkage ? "A generated demo invoice linkage is being shown so the complete PR, PO, and GRN view can still be reviewed." : null}
+        infoMessage={usesSyntheticLinkage ? "A generated demo linkage is being shown so the complete PR, PO, and GRN view can still be reviewed." : null}
         validation={null}
-        idleMessage="Use Go to load invoice records. Searching by PR, PO, or GRN will now surface the linked invoice verification view automatically when a matching chain is available."
       />
     </div>
   );

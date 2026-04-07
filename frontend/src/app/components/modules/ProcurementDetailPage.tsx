@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Download,
   Edit,
-  Eye,
   FileUp,
   LoaderCircle,
   Paperclip,
@@ -91,77 +90,26 @@ const FILE_LABEL_BY_STAGE: Record<Exclude<FrontendStageKey, "INV">, string> = {
 const STAGE_META: Record<Exclude<FrontendStageKey, "INV">, {
   label: string;
   backLabel: string;
-  tabs: string[];
-  activeTab: string;
   color: string;
 }> = {
   PR: {
     label: "Purchase Requisition",
     backLabel: "Purchase Requisitions",
-    tabs: ["Items", "Attachment"],
-    activeTab: "Items",
     color: SAP_BLUE,
   },
   PO: {
     label: "Purchase Order",
     backLabel: "Purchase Orders",
-    tabs: ["Items", "Attachment"],
-    activeTab: "Items",
     color: SAP_BLUE,
   },
   GRN: {
     label: "Goods Receipt Note",
     backLabel: "Goods Receipt Notes",
-    tabs: ["Items", "Attachment"],
-    activeTab: "Items",
     color: SAP_BLUE,
   },
 };
 
 // ─── Sub-components ──────────────────────────────────────────────────────────────
-
-function MetaChip({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div style={{
-      display: "flex",
-      flexDirection: "column",
-      gap: "3px",
-      padding: "10px 16px",
-      backgroundColor: highlight ? "#eff6ff" : "#f8fafc",
-      border: `1px solid ${highlight ? "#bfdbfe" : "#e2e8f0"}`,
-      borderRadius: "10px",
-      minWidth: "130px",
-    }}>
-      <span style={{ fontSize: "10px", fontWeight: "700", color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</span>
-      <span style={{ fontSize: "13px", fontWeight: "600", color: highlight ? "#1d4ed8" : "#0f172a" }}>{value}</span>
-    </div>
-  );
-}
-
-function SectionCard({ title, badge, children }: { title: string; badge?: string; children: React.ReactNode }) {
-  return (
-    <div style={{
-      backgroundColor: "#ffffff",
-      border: "1px solid #e2e8f0",
-      borderRadius: "16px",
-      overflow: "hidden",
-      boxShadow: "0 1px 4px rgba(15,23,42,0.06)",
-    }}>
-      <div style={{
-        padding: "16px 24px",
-        borderBottom: "1px solid #f1f5f9",
-        backgroundColor: "#fafcff",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-      }}>
-        <span style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>{title}</span>
-        {badge && <span style={{ fontSize: "12px", color: "#64748b", fontWeight: "500" }}>{badge}</span>}
-      </div>
-      {children}
-    </div>
-  );
-}
 
 function StatusBadge({ text }: { text: string }) {
   const lower = text.toLowerCase();
@@ -291,35 +239,38 @@ function DocumentsPanel({
   stageKey,
   docs,
   docsLoading,
-  canModify,
+  mode,
   selectedDocumentId,
   onSelectDocument,
-  onReplace,
-  onDelete,
   onReview,
   onComment,
+  onReplace,
+  onDelete,
 }: {
   reference: string;
   stageKey: StageKey;
   docs: StageDocument[];
   docsLoading: boolean;
-  canModify: boolean;
+  mode: "change" | "view";
   selectedDocumentId: string | null;
   onSelectDocument: (docId: string) => void;
-  onReplace: (ref: string, docId: string) => void;
-  onDelete: (docId: string) => Promise<void>;
   onReview: (doc: StageDocument, decision: "ACCEPTED" | "REJECTED", comment?: string) => Promise<void>;
   onComment: (doc: StageDocument, comment?: string) => Promise<void>;
+  onReplace: (doc: StageDocument, file: File) => Promise<void>;
+  onDelete: (doc: StageDocument) => Promise<void>;
 }) {
-  const [editor, setEditor] = useState<{ mode: "comment" | "approve" | "reject"; docId: string } | null>(null);
+  const [editor, setEditor] = useState<{ mode: "reject"; docId: string } | null>(null);
+  const [deletePromptDocId, setDeletePromptDocId] = useState<string | null>(null);
   const [draftText, setDraftText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [busyDocId, setBusyDocId] = useState<string | null>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
   const activeDoc = docs.find((doc) => doc._id === selectedDocumentId) || docs[0] || null;
 
-  const openEditor = (mode: "comment" | "approve" | "reject", doc: StageDocument) => {
+  const openEditor = (mode: "reject", doc: StageDocument) => {
     onSelectDocument(doc._id);
     setEditor({ mode, docId: doc._id });
-    setDraftText(mode === "comment" ? doc.attachment_comment || "" : doc.review_comment || "");
+    setDraftText(doc.review_status === "REJECTED" ? doc.attachment_comment || doc.review_comment || "" : "");
   };
 
   const closeEditor = () => {
@@ -327,28 +278,81 @@ function DocumentsPanel({
     setDraftText("");
   };
 
+  const closeDeletePrompt = () => {
+    setDeletePromptDocId(null);
+  };
+
+  const handleDeleteComment = async () => {
+    if (!activeDoc || deletePromptDocId !== activeDoc._id) return;
+    setSubmitting(true);
+    try {
+      await onComment(activeDoc, undefined);
+      closeDeletePrompt();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleSubmit = async () => {
     if (!editor) return;
     const doc = docs.find((item) => item._id === editor.docId);
     if (!doc) return;
     const cleanText = draftText.trim();
-    if (editor.mode === "reject" && stageKey === "GRN" && !cleanText) return;
+    if (stageKey === "GRN" && !cleanText) return;
 
     setSubmitting(true);
     try {
-      if (editor.mode === "comment") {
-        await onComment(doc, cleanText || undefined);
-      } else {
-        await onReview(doc, editor.mode === "approve" ? "ACCEPTED" : "REJECTED", cleanText || undefined);
-      }
+      await onComment(doc, cleanText || undefined);
+      await onReview(doc, "REJECTED", undefined);
       closeEditor();
     } finally {
       setSubmitting(false);
     }
   };
 
+  const handleReplaceClick = (doc: StageDocument) => {
+    onSelectDocument(doc._id);
+    setBusyDocId(doc._id);
+    replaceInputRef.current?.click();
+  };
+
+  const handleReplaceChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    const doc = docs.find((item) => item._id === busyDocId);
+    event.target.value = "";
+    if (!file || !doc) {
+      setBusyDocId(null);
+      return;
+    }
+
+    try {
+      await onReplace(doc, file);
+    } finally {
+      setBusyDocId(null);
+    }
+  };
+
+  const handleDeleteClick = async (doc: StageDocument) => {
+    onSelectDocument(doc._id);
+    const confirmed = window.confirm(`Delete "${doc.original_filename}" from ${reference}?`);
+    if (!confirmed) return;
+    setBusyDocId(doc._id);
+    try {
+      await onDelete(doc);
+    } finally {
+      setBusyDocId(null);
+    }
+  };
+
   return (
     <div style={{ borderTop: "1px solid #e0edff" }}>
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept=".pdf,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.doc,.docx,.xls,.xlsx,.csv,.txt"
+        style={{ display: "none" }}
+        onChange={(event) => void handleReplaceChange(event)}
+      />
       <div style={{
         padding: "10px 24px",
         backgroundColor: "#f0f7ff",
@@ -388,62 +392,66 @@ function DocumentsPanel({
                 </tr>
               ) : docs.map((doc, i) => (
                 <tr key={doc._id} style={{ backgroundColor: i % 2 === 0 ? "#ffffff" : "#fafcff" }}>
-                  <td style={{ ...TD, color: "#0070F2", fontWeight: "600", minWidth: "240px" }}>{doc.original_filename}</td>
+                  <td style={{ ...TD, minWidth: "240px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <a
+                        href={getDocumentDownloadUrl(stageKey, doc._id, true)}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={() => onSelectDocument(doc._id)}
+                        style={{ color: "#0070F2", fontWeight: "600", textDecoration: "none", cursor: "pointer" }}
+                      >
+                        {doc.original_filename}
+                      </a>
+                      <a
+                        href={getDocumentDownloadUrl(stageKey, doc._id)}
+                        aria-label={`Download ${doc.original_filename}`}
+                        style={{ color: "#64748b", display: "inline-flex", alignItems: "center", cursor: "pointer" }}
+                      >
+                        <Download size={14} />
+                      </a>
+                    </div>
+                  </td>
                   <td style={TD}>{reference}</td>
                   <td style={TD}>v{doc.version}</td>
                   <td style={TD}>{formatDate(doc.uploaded_at)}</td>
                   <td style={TD}><ReviewBadge status={doc.review_status} /></td>
                   <td style={{ ...TD, borderRight: "none" }}>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                      <a
-                        href={getDocumentDownloadUrl(stageKey, doc._id, true)}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={() => onSelectDocument(doc._id)}
-                        style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: `1px solid ${selectedDocumentId === doc._id ? "#0070F2" : "#d9d9d9"}`, color: "#0070F2", borderRadius: "7px", fontSize: "11px", fontWeight: "600", textDecoration: "none", backgroundColor: selectedDocumentId === doc._id ? "#eff6ff" : "#ffffff", cursor: "pointer" }}
-                      >
-                        <Eye size={11} /> View
-                      </a>
                       <button
-                        onClick={() => openEditor("approve", doc)}
+                        onClick={() => void onReview(doc, "ACCEPTED")}
+                        disabled={busyDocId === doc._id}
                         style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #107E3E", color: "#107E3E", borderRadius: "7px", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
                       >
+                        <span style={{ color: "#107E3E", fontSize: "12px", fontWeight: "800", lineHeight: 1 }}>✓</span>
                         Approve
                       </button>
                       <button
                         onClick={() => openEditor("reject", doc)}
+                        disabled={busyDocId === doc._id}
                         style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #BB0000", color: "#BB0000", borderRadius: "7px", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
                       >
+                        <span style={{ color: "#BB0000", fontSize: "12px", fontWeight: "800", lineHeight: 1 }}>X</span>
                         Reject
                       </button>
-                      <button
-                        onClick={() => openEditor("comment", doc)}
-                        style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #d9d9d9", color: "#32363a", borderRadius: "7px", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
-                      >
-                        {doc.attachment_comment ? "Edit Comment" : "Add Comment"}
-                      </button>
-                      <a
-                        href={getDocumentDownloadUrl(stageKey, doc._id)}
-                        style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #d9d9d9", color: "#32363a", borderRadius: "7px", fontSize: "11px", fontWeight: "600", textDecoration: "none", backgroundColor: "#ffffff" }}
-                      >
-                        <Download size={11} /> Download
-                      </a>
-                      {canModify && (
+                      {mode === "change" ? (
                         <>
                           <button
-                            onClick={() => onReplace(reference, doc._id)}
+                            onClick={() => handleReplaceClick(doc)}
+                            disabled={busyDocId === doc._id}
                             style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #0070F2", color: "#0070F2", borderRadius: "7px", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
                           >
-                            <Edit size={11} /> Replace
+                            {busyDocId === doc._id ? "Working..." : "Replace"}
                           </button>
                           <button
-                            onClick={() => void onDelete(doc._id)}
-                            style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #BB0000", color: "#BB0000", borderRadius: "7px", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
+                            onClick={() => void handleDeleteClick(doc)}
+                            disabled={busyDocId === doc._id}
+                            style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 10px", border: "1px solid #64748b", color: "#64748b", borderRadius: "7px", fontSize: "11px", fontWeight: "600", backgroundColor: "#ffffff", cursor: "pointer" }}
                           >
-                            <Trash2 size={11} /> Delete
+                            {busyDocId === doc._id ? "Working..." : "Delete"}
                           </button>
                         </>
-                      )}
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -453,84 +461,109 @@ function DocumentsPanel({
         </div>
       )}
 
-      {activeDoc && (activeDoc.attachment_comment || activeDoc.review_comment || editor) ? (
+      {activeDoc && activeDoc.review_status === "REJECTED" ? (
         <div style={{ borderTop: "1px solid #e2e8f0", backgroundColor: "#fbfdff", padding: "18px 24px", display: "flex", flexDirection: "column", gap: "14px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "12px", flexWrap: "wrap" }}>
             <div>
-              <div style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a" }}>Document Notes</div>
-              <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>{activeDoc.original_filename}</div>
+              <div style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a", textAlign: "center" }}>Rejected Comment</div>
+              <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px", textAlign: "center" }}>{activeDoc.original_filename}</div>
             </div>
-            <ReviewBadge status={activeDoc.review_status} />
           </div>
 
-          {activeDoc.attachment_comment ? (
-            <div style={{ padding: "12px 14px", border: "1px solid #dbeafe", borderRadius: "10px", backgroundColor: "#f8fbff" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#1e40af", marginBottom: "4px" }}>Attachment Comment</div>
-              <div style={{ fontSize: "12px", color: "#334155", whiteSpace: "pre-wrap" }}>{activeDoc.attachment_comment}</div>
-            </div>
-          ) : null}
-
-          {activeDoc.review_comment ? (
-            <div style={{ padding: "12px 14px", border: "1px solid #fde68a", borderRadius: "10px", backgroundColor: "#fffdf5" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#b45309", marginBottom: "4px" }}>Review Note</div>
-              <div style={{ fontSize: "12px", color: "#334155", whiteSpace: "pre-wrap" }}>{activeDoc.review_comment}</div>
-            </div>
-          ) : null}
-
-          {editor && activeDoc._id === editor.docId ? (
-            <div style={{ padding: "14px", border: "1px solid #cbd5e1", borderRadius: "12px", backgroundColor: "#ffffff", display: "flex", flexDirection: "column", gap: "10px" }}>
-              <div style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a" }}>
-                {editor.mode === "comment"
-                  ? "Add Attachment Comment"
-                  : editor.mode === "approve"
-                    ? "Approve Document"
-                    : "Reject Document"}
-              </div>
-              <div style={{ fontSize: "11px", color: "#64748b" }}>
-                {editor.mode === "comment"
-                  ? "Add a note for this uploaded attachment."
-                  : editor.mode === "approve"
-                    ? "Add an optional approval note for this document."
-                    : stageKey === "GRN"
-                      ? "Enter the rejection reason for this GRN document."
-                      : "Add a rejection note for this document."}
-              </div>
-              <textarea
-                value={draftText}
-                onChange={(e) => setDraftText(e.target.value)}
-                rows={4}
-                placeholder={
-                  editor.mode === "comment"
-                    ? "Enter attachment comment"
-                    : editor.mode === "approve"
-                      ? "Enter approval note"
-                      : "Enter rejection reason"
-                }
-                style={{ width: "100%", padding: "10px 12px", border: "1px solid #cbd5e1", borderRadius: "10px", fontSize: "12px", color: "#334155", resize: "vertical", outline: "none" }}
-              />
-              {editor.mode === "reject" && stageKey === "GRN" ? (
-                <div style={{ fontSize: "11px", color: "#BB0000" }}>A rejection reason is required for GRN documents.</div>
-              ) : null}
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", justifyContent: "flex-end", flexWrap: "wrap" }}>
+          {activeDoc.review_status === "REJECTED" ? (
+            <div style={{ width: "100%", maxWidth: "620px", margin: "0 auto", padding: "12px 14px", border: "1px solid #fde68a", borderRadius: "10px", backgroundColor: "#fffdf5" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+                <div style={{ fontSize: "11px", fontWeight: "700", color: "#b45309" }}>Comment</div>
                 <button
                   type="button"
-                  onClick={closeEditor}
-                  disabled={submitting}
-                  style={{ padding: "8px 14px", borderRadius: "9px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "12px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+                  onClick={() => openEditor("reject", activeDoc)}
+                  style={{ display: "flex", alignItems: "center", gap: "4px", border: "none", backgroundColor: "transparent", color: "#0070F2", fontSize: "11px", fontWeight: "700", cursor: "pointer" }}
                 >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleSubmit()}
-                  disabled={submitting || (editor.mode === "reject" && stageKey === "GRN" && !draftText.trim())}
-                  style={{ padding: "8px 16px", borderRadius: "9px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "12px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting || (editor.mode === "reject" && stageKey === "GRN" && !draftText.trim()) ? 0.6 : 1 }}
-                >
-                  {submitting ? "Saving..." : editor.mode === "comment" ? "Save Comment" : editor.mode === "approve" ? "Approve" : "Reject"}
+                  <Edit size={12} />
+                  Edit Comment
                 </button>
               </div>
+              <div style={{ fontSize: "12px", color: "#334155", whiteSpace: "pre-wrap", marginTop: "6px" }}>
+                {activeDoc.attachment_comment || activeDoc.review_comment || "No rejection comment added."}
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeletePromptDocId(activeDoc._id)}
+                style={{ display: "flex", alignItems: "center", gap: "4px", border: "none", backgroundColor: "transparent", color: "#BB0000", fontSize: "11px", fontWeight: "700", cursor: "pointer", marginTop: "10px", marginLeft: "auto" }}
+              >
+                <Trash2 size={12} />
+                Delete Comment
+              </button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {editor && activeDoc && activeDoc._id === editor.docId ? (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(15, 23, 42, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", zIndex: 1000 }}>
+          <div style={{ width: "100%", maxWidth: "520px", backgroundColor: "#ffffff", borderRadius: "16px", border: "1px solid #dbe3ee", boxShadow: "0 20px 40px rgba(15, 23, 42, 0.18)", padding: "18px", display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Reject Document</div>
+            <div style={{ fontSize: "12px", color: "#64748b" }}>
+              {stageKey === "GRN" ? "Enter the rejection reason for this document." : "Add or edit the rejection comment for this document."}
+            </div>
+            <textarea
+              value={draftText}
+              onChange={(e) => setDraftText(e.target.value)}
+              rows={5}
+              placeholder="Enter rejection reason"
+              style={{ width: "100%", padding: "10px 12px", border: "1px solid #cbd5e1", borderRadius: "10px", fontSize: "12px", color: "#334155", resize: "vertical", outline: "none" }}
+            />
+            {stageKey === "GRN" && !draftText.trim() ? (
+              <div style={{ fontSize: "11px", color: "#BB0000" }}>A rejection reason is required for GRN documents.</div>
+            ) : null}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={closeEditor}
+                disabled={submitting}
+                style={{ padding: "8px 14px", borderRadius: "9px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "12px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSubmit()}
+                disabled={submitting || (stageKey === "GRN" && !draftText.trim())}
+                style={{ padding: "8px 16px", borderRadius: "9px", border: "none", backgroundColor: "#0070F2", color: "#ffffff", fontSize: "12px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting || (stageKey === "GRN" && !draftText.trim()) ? 0.6 : 1 }}
+              >
+                {submitting ? "Saving..." : "Reject"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deletePromptDocId && activeDoc && activeDoc._id === deletePromptDocId ? (
+        <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(15, 23, 42, 0.35)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", zIndex: 1000 }}>
+          <div style={{ width: "100%", maxWidth: "520px", backgroundColor: "#ffffff", borderRadius: "16px", border: "1px solid #dbe3ee", boxShadow: "0 20px 40px rgba(15, 23, 42, 0.18)", padding: "18px", display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Delete Comment</div>
+            <div style={{ fontSize: "12px", color: "#64748b" }}>
+              Do you really want to delete this message?
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={closeDeletePrompt}
+                disabled={submitting}
+                style={{ padding: "8px 14px", borderRadius: "9px", border: "1px solid #d9d9d9", backgroundColor: "#ffffff", color: "#475569", fontSize: "12px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteComment()}
+                disabled={submitting}
+                style={{ padding: "8px 16px", borderRadius: "9px", border: "none", backgroundColor: "#BB0000", color: "#ffffff", fontSize: "12px", fontWeight: "700", cursor: submitting ? "not-allowed" : "pointer", opacity: submitting ? 0.6 : 1 }}
+              >
+                {submitting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>
@@ -544,16 +577,12 @@ function UploadPanel({
   stage,
   multiUpload,
   uploading,
-  currentAction,
-  onActionChange,
   onUpload,
 }: {
   reference: string;
   stage: Exclude<FrontendStageKey, "INV">;
   multiUpload: boolean;
   uploading: boolean;
-  currentAction: "upload" | "view" | "change";
-  onActionChange: (action: "upload" | "view" | "change") => void;
   onUpload: (files: File[]) => Promise<void>;
 }) {
   const [files, setFiles] = useState<File[]>([]);
@@ -610,80 +639,34 @@ function UploadPanel({
             onChange={(e) => setFiles(Array.from(e.target.files || []))}
           />
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            disabled={!canUpload}
-            onClick={async () => {
-              if (!canUpload) return;
-              await onUpload(files);
-              setFiles([]);
-              if (inputRef.current) inputRef.current.value = "";
-            }}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "7px",
-              padding: "10px 22px",
-              height: "44px",
-              borderRadius: "10px",
-              border: "none",
-              backgroundColor: canUpload ? "#0070F2" : "#e2e8f0",
-              color: canUpload ? "#ffffff" : "#94a3b8",
-              fontSize: "13px",
-              fontWeight: "700",
-              cursor: canUpload ? "pointer" : "not-allowed",
-              flexShrink: 0,
-            }}
-          >
-            {uploading ? <LoaderCircle size={15} className="animate-spin" /> : <FileUp size={15} />}
-            Upload
-          </button>
-          <button
-            type="button"
-            onClick={() => onActionChange("view")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "7px",
-              padding: "10px 18px",
-              height: "44px",
-              borderRadius: "10px",
-              border: currentAction === "view" ? "1px solid #0070F2" : "1px solid #d9d9d9",
-              backgroundColor: currentAction === "view" ? "#eff6ff" : "#ffffff",
-              color: currentAction === "view" ? "#0070F2" : "#32363a",
-              fontSize: "13px",
-              fontWeight: "700",
-              cursor: "pointer",
-              flexShrink: 0,
-            }}
-          >
-            <Eye size={15} />
-            View
-          </button>
-          <button
-            type="button"
-            onClick={() => onActionChange("change")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "7px",
-              padding: "10px 18px",
-              height: "44px",
-              borderRadius: "10px",
-              border: currentAction === "change" ? "1px solid #0070F2" : "1px solid #d9d9d9",
-              backgroundColor: currentAction === "change" ? "#eff6ff" : "#ffffff",
-              color: currentAction === "change" ? "#0070F2" : "#32363a",
-              fontSize: "13px",
-              fontWeight: "700",
-              cursor: "pointer",
-              flexShrink: 0,
-            }}
-          >
-            <Edit size={15} />
-            Change
-          </button>
-        </div>
+        <button
+          type="button"
+          disabled={!canUpload}
+          onClick={async () => {
+            if (!canUpload) return;
+            await onUpload(files);
+            setFiles([]);
+            if (inputRef.current) inputRef.current.value = "";
+          }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "7px",
+            padding: "10px 22px",
+            height: "44px",
+            borderRadius: "10px",
+            border: "none",
+            backgroundColor: canUpload ? "#0070F2" : "#e2e8f0",
+            color: canUpload ? "#ffffff" : "#94a3b8",
+            fontSize: "13px",
+            fontWeight: "700",
+            cursor: canUpload ? "pointer" : "not-allowed",
+            flexShrink: 0,
+          }}
+        >
+          {uploading ? <LoaderCircle size={15} className="animate-spin" /> : <FileUp size={15} />}
+          Upload
+        </button>
       </div>
     </div>
   );
@@ -736,9 +719,8 @@ export function ProcurementDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState(subTab === "upload" || subTab === "view" || subTab === "change" ? "Attachment" : "Items");
-
-  const replaceInputRef = useRef<HTMLInputElement>(null);
-  const replaceTargetRef = useRef<{ referenceNumber: string; documentId: string } | null>(null);
+  const itemsSectionRef = useRef<HTMLDivElement>(null);
+  const attachmentsSectionRef = useRef<HTMLDivElement>(null);
 
   const loadRecord = async () => {
     setLoading(true);
@@ -781,6 +763,7 @@ export function ProcurementDetailPage() {
   useEffect(() => {
     if (subTab === "upload" || subTab === "view" || subTab === "change") {
       setActiveTab("Attachment");
+      setTimeout(() => attachmentsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
     }
   }, [subTab]);
 
@@ -800,47 +783,17 @@ export function ProcurementDetailPage() {
     }
   };
 
-  const handleReplace = (ref: string, docId: string) => {
-    replaceTargetRef.current = { referenceNumber: ref, documentId: docId };
-    replaceInputRef.current?.click();
+  const goBack = () => {
+    const next = new URLSearchParams(searchParams);
+    if (!next.get("tab")) next.set("tab", frontendStage);
+    navigate(`/documents?${next.toString()}`);
   };
 
-  const onReplaceFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    const target = replaceTargetRef.current;
-    if (!file || !target) return;
-    setUploading(true);
-    setError(null);
-    try {
-      await replaceDocument(stageKey, target.referenceNumber, target.documentId, file);
-      setInfoMessage("Document replaced successfully.");
-      await loadDocs(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Replacement failed.");
-    } finally {
-      setUploading(false);
-      e.target.value = "";
-      replaceTargetRef.current = null;
-    }
+  const goToSection = (section: "Items" | "Attachment") => {
+    setActiveTab(section);
+    const target = section === "Items" ? itemsSectionRef.current : attachmentsSectionRef.current;
+    target?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
-
-  const handleDelete = async (docId: string) => {
-    if (!window.confirm("Delete this document?")) return;
-    setError(null);
-    try {
-      await deleteDocument(stageKey, docId);
-      setInfoMessage("Document deleted.");
-      await loadDocs(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Delete failed.");
-    }
-  };
-
-  const changeAction = (action: "upload" | "view" | "change") => {
-    navigate(`/documents/${frontendStage.toLowerCase()}/${encodeURIComponent(docRef)}?action=${action}`);
-  };
-
-  const goBack = () => navigate(`/documents?tab=${frontendStage}`);
 
   // ── Breadcrumb ──
   const breadcrumb = `Home › Document Verification › ${meta.label}`;
@@ -880,27 +833,10 @@ export function ProcurementDetailPage() {
   }
 
   const totalValue = getTotalValue(record);
+  const attachmentCount = docs.length;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-
-      {/* ── Page header bar ─────────────────────────────────────────────────── */}
-      <div style={{
-        padding: "12px 24px",
-        borderBottom: "1px solid #d9d9d9",
-        backgroundColor: "#ffffff",
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-      }}>
-        <div>
-          <div style={{ fontSize: "11px", color: "#8a8b8c" }}>{breadcrumb}</div>
-          <h1 style={{ fontSize: "16px", fontWeight: "700", color: "#32363a", margin: "2px 0 0" }}>{meta.label} Detail</h1>
-        </div>
-      </div>
-
-      {/* ── Scrollable body ──────────────────────────────────────────────────── */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", backgroundColor: "#f1f5f9" }}>
         <div style={{ padding: "28px 32px", display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1600px" }}>
 
@@ -947,33 +883,14 @@ export function ProcurementDetailPage() {
                 <StatusBadge text={record.status || "Open"} />
               </div>
             </div>
-
-            {/* Meta chips row */}
-            <div style={{ padding: "20px 32px", display: "flex", gap: "12px", flexWrap: "wrap", borderBottom: "1px solid #f1f5f9" }}>
-              <MetaChip label="Reference" value={docRef} highlight />
-              <MetaChip label="Total Value" value={formatCurrency(totalValue)} />
-              <MetaChip label="Items" value={`${record.items.length} item${record.items.length !== 1 ? "s" : ""}`} />
-              {isPRRecord(record) && <>
-                <MetaChip label="Document Type" value={record.document_type || "—"} />
-              </>}
-              {isPORecord(record) && <>
-                <MetaChip label="Purchase Organization" value={record.purchase_organization || "—"} />
-                <MetaChip label="Company Code" value={record.company_code || "—"} />
-                <MetaChip label="Purchase Group" value={record.purchase_group || "—"} />
-              </>}
-              {isGRNRecord(record) && <>
-                <MetaChip label="PO Number" value={record.po_number || "—"} />
-                <MetaChip label="Document Date" value={formatDate(record.document_date)} />
-                <MetaChip label="Posting Date" value={formatDate(record.posting_date)} />
-              </>}
-            </div>
-
             {/* Tab strip */}
             <div style={{ padding: "0 32px", display: "flex", alignItems: "center", gap: "0" }}>
-              {meta.tabs.map((tab) => (
+              {[`Items (${record.items.length})`, `Attachments (${attachmentCount})`].map((tabLabel, index) => {
+                const tab = index === 0 ? "Items" : "Attachment";
+                return (
                 <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
+                  key={tabLabel}
+                  onClick={() => goToSection(tab)}
                   style={{
                     padding: "14px 20px",
                     fontSize: "13px",
@@ -986,39 +903,44 @@ export function ProcurementDetailPage() {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {tab}
+                  {tabLabel}
                 </button>
-              ))}
+              )})}
             </div>
           </div>
 
-          {/* ── Alert messages ───────────────────────────────────────── */}
           <AlertBar error={error} info={infoMessage} />
 
-          {/* ── Items tab ────────────────────────────────────────────── */}
-          {activeTab === "Items" && (
-            <SectionCard
-              title={`Items (${record.items.length})`}
-              badge={`Total: ${formatCurrency(totalValue)}`}
-            >
+          <div
+            ref={itemsSectionRef}
+            style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "16px", overflow: "hidden", boxShadow: "0 1px 4px rgba(15,23,42,0.06)" }}
+          >
+            <div style={{ padding: "16px 24px", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+              <div style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Items ({record.items.length})</div>
+              <div style={{ fontSize: "12px", color: "#64748b", fontWeight: "500" }}>Total: {formatCurrency(totalValue)}</div>
+            </div>
+            <div>
               <ItemsTable record={record} />
-            </SectionCard>
-          )}
+            </div>
+          </div>
 
-          {/* ── Attachment tab ───────────────────────────────────────── */}
-          {activeTab === "Attachment" && (
-            <SectionCard title="Attachment">
+          <div
+            ref={attachmentsSectionRef}
+            style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "16px", overflow: "hidden", boxShadow: "0 1px 4px rgba(15,23,42,0.06)" }}
+          >
+            <div style={{ padding: "16px 24px", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+              <div style={{ fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>Attachments ({attachmentCount})</div>
+            </div>
+            <div>
               {(subTab === "view" || subTab === "change") && (
                 <DocumentsPanel
                   reference={docRef}
                   stageKey={stageKey}
                   docs={docs}
                   docsLoading={docsLoading}
-                  canModify={subTab === "change"}
+                  mode={subTab}
                   selectedDocumentId={selectedDocumentId}
                   onSelectDocument={setSelectedDocumentId}
-                  onReplace={handleReplace}
-                  onDelete={handleDelete}
                   onReview={async (doc, decision, comment) => {
                     setError(null);
                     const cleanComment = (comment || "").trim();
@@ -1047,6 +969,28 @@ export function ProcurementDetailPage() {
                       setError(err instanceof Error ? err.message : "Unable to save document comment.");
                     }
                   }}
+                  onReplace={async (doc, file) => {
+                    setError(null);
+                    try {
+                      const updated = await replaceDocument(stageKey, docRef, doc._id, file);
+                      setDocs((current) => current.map((item) => (item._id === doc._id ? updated : item)));
+                      setSelectedDocumentId(updated._id);
+                      setInfoMessage(`${stageKey} document replaced successfully.`);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Unable to replace document.");
+                    }
+                  }}
+                  onDelete={async (doc) => {
+                    setError(null);
+                    try {
+                      await deleteDocument(stageKey, doc._id);
+                      setDocs((current) => current.filter((item) => item._id !== doc._id));
+                      setSelectedDocumentId((current) => (current === doc._id ? null : current));
+                      setInfoMessage(`${stageKey} document deleted successfully.`);
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Unable to delete document.");
+                    }
+                  }}
                 />
               )}
               {subTab === "upload" && (
@@ -1055,18 +999,14 @@ export function ProcurementDetailPage() {
                   stage={frontendStage}
                   multiUpload={multiUpload}
                   uploading={uploading}
-                  currentAction={subTab}
-                  onActionChange={changeAction}
                   onUpload={handleUpload}
                 />
               )}
-            </SectionCard>
-          )}
+            </div>
+          </div>
 
         </div>
       </div>
-
-      <input ref={replaceInputRef} type="file" accept={FILE_ACCEPT_BY_STAGE[frontendStage]} style={{ display: "none" }} onChange={(e) => void onReplaceFileSelected(e)} />
     </div>
   );
 }

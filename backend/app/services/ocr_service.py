@@ -81,9 +81,22 @@ def _extract_text_from_pdf(file_path: str) -> str:
 def _extract_text_from_image(file_path: str) -> str:
     try:
         import pytesseract
-        from PIL import Image
+        from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+
         img = Image.open(file_path)
-        return pytesseract.image_to_string(img)
+        prepared_images = [img]
+
+        grayscale = ImageOps.grayscale(img)
+        prepared_images.append(grayscale)
+        prepared_images.append(ImageEnhance.Contrast(grayscale).enhance(2.0))
+        prepared_images.append(ImageEnhance.Sharpness(grayscale).enhance(2.0).filter(ImageFilter.SHARPEN))
+
+        attempts = []
+        for prepared in prepared_images:
+            attempts.append(pytesseract.image_to_string(prepared, config="--psm 6"))
+            attempts.append(pytesseract.image_to_string(prepared, config="--psm 11"))
+
+        return max(attempts, key=lambda value: len(value.strip()), default="")
     except Exception as exc:
         logger.warning("Tesseract extraction failed: %s", exc)
         return ""
@@ -123,9 +136,21 @@ def _detect_stage(text: str) -> str | None:
 
 def _find_number(text: str, ref_number: str) -> bool:
     """Check if ref_number appears in OCR text (case-insensitive, ignoring dashes/spaces)."""
-    # normalise for flexible match
-    clean_ref = re.sub(r"[\s\-]", "", ref_number).lower()
-    clean_text = re.sub(r"[\s\-]", "", text).lower()
+    def normalize(value: str) -> str:
+        cleaned = re.sub(r"[\s\-:/#]", "", value).upper()
+        substitutions = str.maketrans({
+            "O": "0",
+            "Q": "0",
+            "I": "1",
+            "L": "1",
+            "S": "5",
+            "B": "8",
+            "Z": "2",
+        })
+        return cleaned.translate(substitutions)
+
+    clean_ref = normalize(ref_number)
+    clean_text = normalize(text)
     return clean_ref in clean_text
 
 
